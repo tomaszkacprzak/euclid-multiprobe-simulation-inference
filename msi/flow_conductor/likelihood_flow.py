@@ -80,6 +80,23 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             floatx (torch.dtype, optional): The default float type. Defaults to torch.float32.
         """
 
+        self._init_kwargs = {
+            "params": params,
+            "conf": conf,
+            "out_dir": out_dir,
+            "model_dir": model_dir,
+            "prefix": prefix,
+            "suffix": suffix,
+            "label": label,
+            "feature_dim": feature_dim,
+            "embedding_net": embedding_net,
+            "base_dist": base_dist,
+            "transform": transform,
+            "device": device,
+            "floatx": floatx,
+            "torch_seed": torch_seed,
+        }
+
         self.params = params
         self.conf = files.load_config(conf)
 
@@ -90,12 +107,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         self.label = label
         self._setup_dirs(".pt")
 
-        # the summary statistic has the same dimension as the constrained parameters
+        # assume the summary statistic has the same dimension as the constrained parameters
         context_dim = len(params)
-
-        # if feature_dim is None:
-        #     feature_dim = context_dim
-        #     LOGGER.warning(f"Assuming that the feature/summary dimension is equal to the context/parameter dimension")
 
         # default architecture
         if embedding_net is None:
@@ -457,7 +470,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         return samples
 
-    def log_likelihood(self, x, theta, return_numpy=False):
+    def log_likelihood(self, x, theta, return_numpy=False, use_validation_weights=False):
         """Wrapper for the log_prob method of the base Flow. In most cases (e.g. for training and MCMC), the raw
         log_prob method is preferred.
 
@@ -466,6 +479,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 dimensional, like shape (n_cosmos, n_examples, n_summary).
             theta (Union[np.ndarray,torch.tensor]): Array/tensor of the cosmological parameters. Same behavior as for x.
             return_numpy (bool, optional): Return numpy arrays instead of torch.tensors. Defaults to False.
+            use_validation_weights (bool, optional): Dummy argument for compatibility with LikelihoodFlowEnsemble. Defaults to False.
 
         Returns:
             np.ndarray or torch.tensor: Non-normalized log probabilities.
@@ -510,6 +524,8 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         label=None,
         device=None,
         dont_save=False,
+        method="ensemble",
+        use_validation_weights=False,
     ):
         """
         Sample from the posterior distribution p(theta|x) using likelihood learned by the flow model and the flat
@@ -614,10 +630,11 @@ class LikelihoodFlow(Flow, LikelihoodBase):
     # utils ###########################################################################################################
 
     def save(self):
-        """Save the weights of the model to disk."""
+        """Save the weights and initialization arguments of the model to disk."""
 
         if self.model_dir is not None:
-            torch.save(self.state_dict(), self.model_file)
+            checkpoint = {"state_dict": self.state_dict(), "init_kwargs": self._init_kwargs}
+            torch.save(checkpoint, self.model_file)
             LOGGER.info(f"Saved the model to {self.model_file}")
         else:
             LOGGER.warning(f"Could not save the model, no output directory specified")
@@ -631,8 +648,62 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             map_location = None
 
         if self.model_dir is not None:
-            self.load_state_dict(torch.load(self.model_file, map_location=map_location))
+            loaded = torch.load(self.model_file, map_location=map_location)
+            if isinstance(loaded, dict) and "state_dict" in loaded:
+                self.load_state_dict(loaded["state_dict"])
+            else:
+                self.load_state_dict(loaded)
             LOGGER.info(f"Loaded the model from {self.model_file}")
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint_file=None,
+        model_dir=None,
+        out_dir=None,
+        prefix="",
+        suffix="",
+        label=None,
+        **kwargs_overrides,
+    ):
+        """
+        Restore a completely initialized model from a checkpoint file.
+
+        Args:
+            checkpoint_file (str, optional): The path to the saved .pt file.
+            model_dir (str, optional): The directory containing the model file.
+            out_dir (str, optional): The base output directory.
+            prefix (str, optional): Prefix for the model directory name.
+            suffix (str, optional): Suffix for the model directory name.
+            label (str, optional): Subdirectory label within out_dir.
+            **kwargs_overrides: Optional arguments to override the ones saved in the checkpoint.
+
+        Returns:
+            LikelihoodFlow: The fully restored model.
+        """
+        if checkpoint_file is None:
+            if model_dir is None and out_dir is not None:
+                if label is None:
+                    model_dir = os.path.join(out_dir, prefix + cls.model_name + suffix)
+                else:
+                    model_dir = os.path.join(out_dir, label, prefix + cls.model_name + suffix)
+
+            if model_dir is not None:
+                checkpoint_file = os.path.join(model_dir, f"{cls.model_name}.pt")
+
+        if checkpoint_file is None:
+            raise ValueError("Insufficient path arguments to determine checkpoint_file.")
+        loaded = torch.load(checkpoint_file, map_location="cpu")
+
+        if not isinstance(loaded, dict) or "init_kwargs" not in loaded:
+            raise ValueError(f"The checkpoint at {checkpoint_file} does not contain the required 'init_kwargs'.")
+
+        init_kwargs = loaded["init_kwargs"]
+        init_kwargs.update(kwargs_overrides)
+
+        model = cls(**init_kwargs, load_existing=True)
+
+        return model
 
 
 class LikelihoodFlowEnsemble(LikelihoodBase):
@@ -649,14 +720,19 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         self,
         params,
         conf=None,
-        n_flows=5,
+        n_flows=4,
         # output
         out_dir=None,
         model_dir=None,
+        prefix="",
+        suffix="",
         label=None,
         load_existing=True,
         # architecture
         feature_dim=None,
+        embedding_net=None,
+        base_dist=None,
+        transform=None,
         embedding_net_fn=None,
         base_dist_fn=None,
         transform_fn=None,
@@ -674,6 +750,8 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             conf (str, optional): The configuration file path. Defaults to None.
             out_dir (str, optional): The output directory path. Defaults to None.
             model_dir (str, optional): The model directory path. Defaults to None.
+            prefix (str, optional): The prefix used in the saved filenames. Defaults to "".
+            suffix (str, optional): The suffix used in the saved filenames. Defaults to "".
             label (str, optional): The label used in the saved filenames. Defaults to None.
             load_existing (bool, optional): Whether to load models from disk if they exist. Defaults to True.
             embedding_net_fn (callable, optional): Function that returns a new embedding network. Defaults to None.
@@ -684,14 +762,38 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             torch_seed (int, optional): Base random seed. Each flow gets seed + flow_idx. Defaults to 7.
         """
 
+        self._init_kwargs = {
+            "params": params,
+            "conf": conf,
+            "n_flows": n_flows,
+            "out_dir": out_dir,
+            "model_dir": model_dir,
+            "prefix": prefix,
+            "suffix": suffix,
+            "label": label,
+            "load_existing": False,
+            "feature_dim": feature_dim,
+            "embedding_net": embedding_net,
+            "base_dist": base_dist,
+            "transform": transform,
+            "embedding_net_fn": embedding_net_fn,
+            "base_dist_fn": base_dist_fn,
+            "transform_fn": transform_fn,
+            "device": device,
+            "floatx": floatx,
+            "torch_seed": torch_seed,
+        }
+
         self.params = params
         self.n_flows = n_flows
         self.conf = files.load_config(conf)
 
         self.out_dir = out_dir
         self.model_dir = model_dir
+        self.prefix = prefix
+        self.suffix = suffix
         self.label = label
-        self._setup_dirs("")
+        self._setup_dirs(".pt")
 
         self.device = device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         self.floatx = floatx
@@ -705,24 +807,46 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         self.flows = []
         self.validation_losses = []
         for i in range(n_flows):
-            flow_label = f"{label}_flow_{i}" if label else f"flow_{i}"
+            flow_name = f"flow_{i}"
+            flow_label = f"{label}_{flow_name}" if label else flow_name
+
+            # create specific model directory for this flow
+            flow_model_dir = None
+            if self.model_dir is not None:
+                flow_model_dir = os.path.join(self.model_dir, flow_name)
+                os.makedirs(flow_model_dir, exist_ok=True)
 
             # get fresh architecture components for each flow
-            embedding_net = embedding_net_fn() if embedding_net_fn is not None else None
-            base_dist = base_dist_fn() if base_dist_fn is not None else None
-            transform = transform_fn() if transform_fn is not None else None
+            import copy
+
+            if embedding_net_fn is not None:
+                flow_embedding_net = embedding_net_fn()
+            else:
+                flow_embedding_net = copy.deepcopy(embedding_net) if embedding_net is not None else None
+
+            if base_dist_fn is not None:
+                flow_base_dist = base_dist_fn()
+            else:
+                flow_base_dist = copy.deepcopy(base_dist) if base_dist is not None else None
+
+            if transform_fn is not None:
+                flow_transform = transform_fn()
+            else:
+                flow_transform = copy.deepcopy(transform) if transform is not None else None
 
             flow = LikelihoodFlow(
                 params=params,
                 conf=conf,
                 out_dir=out_dir,
-                model_dir=model_dir,
+                model_dir=flow_model_dir,
+                prefix=prefix,
+                suffix=suffix,
                 label=flow_label,
                 load_existing=load_existing,
                 feature_dim=feature_dim,
-                embedding_net=embedding_net,
-                base_dist=base_dist,
-                transform=transform,
+                embedding_net=flow_embedding_net,
+                base_dist=flow_base_dist,
+                transform=flow_transform,
                 device=device,
                 floatx=floatx,
                 torch_seed=torch_seed + i,  # different seed for each flow
@@ -746,6 +870,10 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         n_patience_epochs=None,
         min_delta=1e-4,
         save_model=True,
+        seed=None,
+        run_c2st=False,
+        c2st_hidden_dim=64,
+        c2st_n_epochs=50,
     ):
         """
         Train all flows in the ensemble on the same data.
@@ -764,14 +892,19 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             n_patience_epochs (int, optional): The number of epochs for early stopping. Defaults to None.
             min_delta (float, optional): The minimum change for early stopping. Defaults to 1e-4.
             save_model (bool, optional): Whether to save the models after training. Defaults to True.
+            seed (int, optional): The seed for the random data split. Defaults to None, then each flow uses its own seed.
+            run_c2st (bool, optional): Whether to run a Classifier Two-Sample Test. Defaults to False.
+            c2st_hidden_dim (int, optional): Hidden layer size for the C2ST classifier MLP. Defaults to 64.
+            c2st_n_epochs (int, optional): Number of epochs to train the C2ST classifier. Defaults to 50.
         """
 
         LOGGER.info(f"Training ensemble of {self.n_flows} flows")
 
         self.validation_losses = []
+        histories = []
         for i, flow in enumerate(self.flows):
             LOGGER.info(f"Training flow {i+1}/{self.n_flows}")
-            flow.fit(
+            history = flow.fit(
                 x=x,
                 theta=theta,
                 n_epochs=n_epochs,
@@ -785,15 +918,21 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 n_patience_epochs=n_patience_epochs,
                 min_delta=min_delta,
                 save_model=save_model,
-                seed=self.torch_seed,
+                seed=seed if seed is not None else self.torch_seed,
+                run_c2st=run_c2st,
+                c2st_hidden_dim=c2st_hidden_dim,
+                c2st_n_epochs=c2st_n_epochs,
             )
             final_vali_loss = flow._vali_epoch()
             self.validation_losses.append(final_vali_loss)
+            histories.append(history)
             LOGGER.info(f"Flow {i+1} final validation loss: {final_vali_loss:.4f}")
 
         # log validation-based weights
         weights = self._compute_validation_weights()
         LOGGER.info(f"Validation-based weights: {weights}")
+
+        return histories
 
     def sample_likelihood(self, theta, n_samples=1000, batch_size=None, return_numpy=True):
         """
@@ -1030,15 +1169,112 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
 
     def save(self):
         """Save all flows in the ensemble."""
+        if self.model_dir is not None:
+            checkpoint = {"init_kwargs": self._init_kwargs}
+            torch.save(checkpoint, self.model_file)
+
         for flow in self.flows:
             flow.save()
         LOGGER.info(f"Saved ensemble of {self.n_flows} flows")
 
     def load(self):
         """Load all flows in the ensemble."""
+        if self.model_dir is not None:
+            try:
+                # we don't strictly need to load the init_kwargs, but we can verify it's there
+                loaded = torch.load(self.model_file, map_location="cpu")
+            except FileNotFoundError:
+                LOGGER.warning(f"Could not load the model from {self.model_file}")
+
         for flow in self.flows:
             flow.load()
         LOGGER.info(f"Loaded ensemble of {self.n_flows} flows")
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        checkpoint_file=None,
+        model_dir=None,
+        out_dir=None,
+        prefix="",
+        suffix="",
+        label=None,
+        **kwargs_overrides,
+    ):
+        """
+        Restore a completely initialized ensemble model from a checkpoint file.
+
+        Args:
+            checkpoint_file (str, optional): The path to the saved .pt file.
+            model_dir (str, optional): The directory containing the model file.
+            out_dir (str, optional): The base output directory.
+            prefix (str, optional): Prefix for the model directory name.
+            suffix (str, optional): Suffix for the model directory name.
+            label (str, optional): Subdirectory label within out_dir.
+            **kwargs_overrides: Optional arguments to override the ones saved in the checkpoint.
+
+        Returns:
+            LikelihoodFlowEnsemble: The fully restored model.
+        """
+        if checkpoint_file is None:
+            if model_dir is None and out_dir is not None:
+                if label is None:
+                    model_dir = os.path.join(out_dir, prefix + cls.model_name + suffix)
+                else:
+                    model_dir = os.path.join(out_dir, label, prefix + cls.model_name + suffix)
+
+            if model_dir is not None:
+                checkpoint_file = os.path.join(model_dir, f"{cls.model_name}.pt")
+
+        if checkpoint_file is None:
+            raise ValueError("Insufficient path arguments to determine checkpoint_file.")
+
+        try:
+            loaded = torch.load(checkpoint_file, map_location="cpu")
+        except FileNotFoundError:
+            # For backward compatibility where we might have saved individual flows but not the ensemble file itself
+            # We can reconstruct it from the first flow if it exists
+            if model_dir is not None:
+                flow_0_file = os.path.join(model_dir, "flow_0", f"{LikelihoodFlow.model_name}.pt")
+                if os.path.exists(flow_0_file):
+                    LOGGER.warning(f"Could not find {checkpoint_file}, attempting to load from {flow_0_file}")
+                    flow_loaded = torch.load(flow_0_file, map_location="cpu")
+                    if isinstance(flow_loaded, dict) and "init_kwargs" in flow_loaded:
+                        loaded = {"init_kwargs": flow_loaded["init_kwargs"]}
+                        # If the old save format had no n_flows in init_kwargs but there are directories
+                        import glob
+
+                        flow_dirs = glob.glob(os.path.join(model_dir, "flow_*"))
+                        loaded["init_kwargs"]["n_flows"] = len(flow_dirs)
+                    else:
+                        raise FileNotFoundError(f"Missing {checkpoint_file} and cannot reconstruct from {flow_0_file}")
+                else:
+                    raise
+            else:
+                raise
+
+        if not isinstance(loaded, dict) or "init_kwargs" not in loaded:
+            raise ValueError(f"The checkpoint at {checkpoint_file} does not contain the required 'init_kwargs'.")
+
+        init_kwargs = loaded["init_kwargs"]
+
+        # update paths in init_kwargs to match the current loading context
+        init_kwargs["model_dir"] = model_dir
+        init_kwargs["out_dir"] = out_dir
+        init_kwargs["prefix"] = prefix
+        init_kwargs["suffix"] = suffix
+        init_kwargs["label"] = label
+
+        init_kwargs.update(kwargs_overrides)
+        if "load_existing" in init_kwargs:
+            del init_kwargs["load_existing"]
+
+        model = cls(**init_kwargs, load_existing=True)
+
+        if "validation_losses" in loaded:
+            model.validation_losses = loaded["validation_losses"]
+
+        return model
 
     def _compute_validation_weights(self):
         """
@@ -1060,12 +1296,3 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         weights = weights / np.sum(weights)
 
         return weights
-
-    def _setup_dirs(self, ext):
-        """Setup output directories (inherited from LikelihoodBase)."""
-        if self.out_dir is not None:
-            os.makedirs(self.out_dir, exist_ok=True)
-
-        if self.model_dir is None and self.out_dir is not None:
-            self.model_dir = os.path.join(self.out_dir, "models")
-            os.makedirs(self.model_dir, exist_ok=True)
