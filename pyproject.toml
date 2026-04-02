@@ -36,16 +36,17 @@ dependencies = [
     "seaborn",
     "tqdm",
     "tarp",
+    "deprecation",
     "trianglechain",
     "icecream",
+    "enflows",
+    "sbi",
 ]
 
 [project.optional-dependencies]
 # Only for environments where PyTorch is not pre-installed
 torch = [
     "torch",
-    "enflows",
-    "sbi",
 ]
 
 # Only for environments where TensorFlow is not pre-installed
