@@ -119,9 +119,9 @@ class LikelihoodBase(ABC):
         # flags
         do_hist=False,
         do_dlss=False,
-        do_eecp=False,
-        do_tarp=False,
-        tarp_kwargs={},
+        do_eecp=True,
+        do_tarp=True,
+        tarp_kwargs={"n_bootstrap": 100, "n_alpha_bins": 20},
         # output
         out_dir=None,
         prefix="",

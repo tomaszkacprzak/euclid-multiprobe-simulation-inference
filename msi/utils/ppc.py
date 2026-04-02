@@ -77,16 +77,16 @@ class PosteriorPredictiveChecks:
 
         if self.probe1_pred_file:
             LOGGER.info(f"Loading {probe1_name} data")
-            self.s_probe1_grid, self.theta_probe1_grid, self.probe1_obs_dict = input_output.load_network_preds_simple(
-                self.probe1_pred_file
+            self.s_probe1_grid, self.theta_probe1_grid, self.probe1_obs_dict, _ = (
+                input_output.load_network_preds_simple(self.probe1_pred_file)
             )
             self.probe1_params = self._get_probe_params(probe1_name)
             self.probe1_cosmo_idx = [self.probe1_params.index(p) for p in cosmo_params]
 
         if self.probe2_pred_file:
             LOGGER.info(f"Loading {probe2_name} data")
-            self.s_probe2_grid, self.theta_probe2_grid, self.probe2_obs_dict = input_output.load_network_preds_simple(
-                self.probe2_pred_file
+            self.s_probe2_grid, self.theta_probe2_grid, self.probe2_obs_dict, _ = (
+                input_output.load_network_preds_simple(self.probe2_pred_file)
             )
             self.probe2_params = self._get_probe_params(probe2_name)
             self.probe2_cosmo_idx = [self.probe2_params.index(p) for p in cosmo_params]

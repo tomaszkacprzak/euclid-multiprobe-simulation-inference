@@ -46,11 +46,11 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
 
     h5_keys = [
         "fiducial/vali/pred",
-        "fiducial/vali/i_example",
+        "fiducial/vali/i_signal",
         "fiducial/vali/i_noise",
         "grid/preds/test",
         "grid/cosmos/test",
-        "grid/i_example/test",
+        "grid/i_signal/test",
         "grid/i_noise/test",
         "grid/i_sobol/test",
     ]
@@ -108,7 +108,7 @@ def load_human_summaries(
 
     # fiducial
     if return_fiducial:
-        fidu_keys = ["i_example", "i_noise"]
+        fidu_keys = ["i_signal", "i_noise"]
         if summary_type == "cls":
             # TODO hacky
             if cls_from_maps:
@@ -131,7 +131,7 @@ def load_human_summaries(
 
     # grid
     if return_grid:
-        grid_keys = ["cosmo", "i_example", "i_noise", "i_sobol"]
+        grid_keys = ["cosmo", "i_signal", "i_noise", "i_sobol"]
         if summary_type == "cls":
             # TODO hacky
             if cls_from_maps:
@@ -176,14 +176,23 @@ def load_network_preds_simple(pred_file):
         grid_preds = f["grid/preds/test"][:]
         grid_cosmos = f["grid/cosmos/test"][:]
 
+        if grid_preds.ndim == 3:
+            grid_preds = np.concatenate(grid_preds, axis=0)
+            grid_cosmos = np.concatenate(grid_cosmos, axis=0)
+
         LOGGER.info(f"grid_preds.shape = {grid_preds.shape}")
         LOGGER.info(f"grid_cosmos.shape = {grid_cosmos.shape}")
 
-        all_obs_preds = {}
+        obs_preds = {}
         for key, value in f["obs/preds"].items():
             value = value[:]
 
             LOGGER.info(f"{key} with shape {value.shape}")
-            all_obs_preds[key] = value
+            obs_preds[key] = value
 
-    return grid_preds, grid_cosmos, all_obs_preds
+        obs_cosmos = {}
+        for key, value in f["obs/cosmos"].items():
+            value = value[:]
+            obs_cosmos[key] = value
+
+    return grid_preds, grid_cosmos, obs_preds, obs_cosmos
