@@ -95,11 +95,11 @@ def get_reshaped_human_summaries(
     concat_bin_dim=True,
     do_plot=True,
     # selection
+    with_fiducial=True,
     with_lensing=True,
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
-    with_fiducial=True,
     with_grid=True,
     # power spectra specific
     bin_indices=None,
@@ -125,6 +125,13 @@ def get_reshaped_human_summaries(
 
     msfm_conf = files.load_config(msfm_conf)
 
+    store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+    store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+    n_z_lensing_total = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering_total = len(msfm_conf["survey"]["maglim"]["z_bins"])
+    n_z_lensing_active = n_z_lensing_total if store_lensing else 0
+    n_z_clustering_active = n_z_clustering_total if store_clustering else 0
+
     if scales_from_conf := dlss_conf is not None:
         dlss_conf = configuration.load_deep_lss_config(dlss_conf)
 
@@ -132,22 +139,27 @@ def get_reshaped_human_summaries(
 
     if summary_type == "cls":
         if theta_fwhms is None and scales_from_conf:
-            theta_fwhms = (
-                dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
-            )
+            theta_fwhms = []
+            if store_lensing:
+                theta_fwhms.extend(dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"])
+            if store_clustering:
+                theta_fwhms.extend(dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"])
             LOGGER.info(f"Using theta_fwhm = {theta_fwhms} from the dlss config")
         if white_noise_sigmas is None and scales_from_conf:
-            white_noise_sigmas = (
-                dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
-                + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
-            )
+            white_noise_sigmas = []
+            if store_lensing:
+                white_noise_sigmas.extend(dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"])
+            if store_clustering:
+                white_noise_sigmas.extend(dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"])
             LOGGER.info(f"Using white_noise_sigma = {white_noise_sigmas} from the dlss config")
         # this l_max here and the theta_fwhm are fully equivalent. This is not to be confused with the l_max resulting
         # from the white noise
         if l_maxs is None and scales_from_conf:
-            theta_fwhms = (
-                dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
-            )
+            theta_fwhms = []
+            if store_lensing:
+                theta_fwhms.extend(dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"])
+            if store_clustering:
+                theta_fwhms.extend(dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"])
             l_maxs = scales.angle_to_ell(np.array(theta_fwhms), arcmin=dlss_conf["scale_cuts"]["arcmin"])
             LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
         if l_mins is None and scales_from_conf:
@@ -179,12 +191,22 @@ def get_reshaped_human_summaries(
                 fidu_summs = np.load(fidu_file)
                 grid_summs = np.load(grid_file)
                 file_dict = input_output.load_human_summaries(
-                    base_dir, summary_type, file_label=file_label, return_raw_cls=False
+                    base_dir,
+                    summary_type,
+                    file_label=file_label,
+                    return_raw_cls=False,
+                    return_fiducial=with_fiducial,
+                    return_grid=with_grid,
                 )
                 LOGGER.info(f"Loaded the binned Cls from {bin_names}")
             except FileNotFoundError:
                 file_dict = input_output.load_human_summaries(
-                    base_dir, summary_type, file_label=file_label, return_raw_cls=True
+                    base_dir,
+                    summary_type,
+                    file_label=file_label,
+                    return_raw_cls=True,
+                    return_fiducial=with_fiducial,
+                    return_grid=with_grid,
                 )
                 LOGGER.warning(f"Applying the scale cuts to the raw Cls, this takes a while and consumes a lot of RAM")
                 LOGGER.timer.start("scale_cuts")
@@ -219,8 +241,10 @@ def get_reshaped_human_summaries(
                 file_label=file_label,
                 cls_from_maps=cls_from_maps,
                 return_raw_cls=False,
+                return_fiducial=with_fiducial,
+                return_grid=with_grid,
             )
-            fidu_summs = file_dict[f"fiducial/cls/binned"]
+            fidu_summs = file_dict[f"fiducial/cls/binned"] if with_fiducial else None
             grid_summs = file_dict[f"grid/cls/binned"]
 
             LOGGER.info(f"Applying scale cuts to the pre-binned Cls")
@@ -237,12 +261,25 @@ def get_reshaped_human_summaries(
             try:
                 noise_cls = input_output.load_cl_white_noise(base_dir)
                 with_noise = True
+                
+                n_total_expected = (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
+                if noise_cls.shape[-1] == n_total_expected and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active:
+                    total_indices, _ = cross_statistics.get_cross_bin_indices(
+                        n_z_lensing=n_z_lensing_total,
+                        n_z_clustering=n_z_clustering_total,
+                        with_lensing=store_lensing,
+                        with_clustering=store_clustering,
+                        with_cross_z=True,
+                        with_cross_probe=(store_lensing and store_clustering)
+                    )
+                    noise_cls = noise_cls[..., total_indices]
+                    LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
             except FileNotFoundError:
                 with_noise = False
                 LOGGER.warning(f"No white noise Cls found, continuing without")
 
             # apply the smoothing to all (cross) bins, the selection only happens later
-            n_z = len(msfm_conf["survey"]["metacal"]["z_bins"]) + len(msfm_conf["survey"]["maglim"]["z_bins"])
+            n_z = n_z_lensing_active + n_z_clustering_active
 
             k = 0
             for i in range(n_z):
@@ -267,7 +304,8 @@ def get_reshaped_human_summaries(
                         smoothing_fac = smoothing_fac**2
                         smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
 
-                        fidu_summs[..., k] *= smoothing_fac
+                        if with_fiducial:
+                            fidu_summs[..., k] *= smoothing_fac
                         grid_summs[..., k] *= smoothing_fac
                         if with_noise:
                             noise_cls[..., k] *= white_noise_sigmas[i] * white_noise_sigmas[j]
@@ -282,9 +320,14 @@ def get_reshaped_human_summaries(
         )
 
         file_dict = input_output.load_human_summaries(
-            base_dir, summary_type, file_label=file_label, return_raw_cls=False
+            base_dir,
+            summary_type,
+            file_label=file_label,
+            return_raw_cls=False,
+            return_fiducial=with_fiducial,
+            return_grid=with_grid,
         )
-        fidu_summs = file_dict[f"fiducial/{summary_type}"]
+        fidu_summs = file_dict[f"fiducial/{summary_type}"] if with_fiducial else None
         grid_summs = file_dict[f"grid/{summary_type}"]
 
     else:
@@ -295,6 +338,8 @@ def get_reshaped_human_summaries(
 
     if bin_indices is None:
         bin_indices, bin_names = cross_statistics.get_cross_bin_indices(
+            n_z_lensing=n_z_lensing_active,
+            n_z_clustering=n_z_clustering_active,
             with_lensing=with_lensing,
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
@@ -305,26 +350,36 @@ def get_reshaped_human_summaries(
     # select the right auto and cross bins)
     assert isinstance(bin_indices, (list, np.ndarray)), "bin_indices must be a list or numpy array"
     LOGGER.info(f"Using the bin indices {bin_indices}")
-    fidu_summs = fidu_summs[..., bin_indices]
+    if with_fiducial:
+        fidu_summs = fidu_summs[..., bin_indices]
     grid_summs = grid_summs[..., bin_indices]
     if with_noise:
         noise_cls = noise_cls[..., bin_indices]
 
     if keep_first_i_bins is not None:
         LOGGER.warning(f"Keeping only the first {keep_first_i_bins} bins")
-        fidu_summs = fidu_summs[..., :keep_first_i_bins, :]
+        if with_fiducial:
+            fidu_summs = fidu_summs[..., :keep_first_i_bins, :]
         grid_summs = grid_summs[..., :keep_first_i_bins, :]
         if with_noise:
             noise_cls = noise_cls[..., :keep_first_i_bins, :]
     if keep_last_i_bins is not None:
         LOGGER.warning(f"Keeping only the last {keep_last_i_bins} bins")
-        fidu_summs = fidu_summs[..., -keep_last_i_bins:, :]
+        if with_fiducial:
+            fidu_summs = fidu_summs[..., -keep_last_i_bins:, :]
         grid_summs = grid_summs[..., -keep_last_i_bins:, :]
         if with_noise:
             noise_cls = noise_cls[..., -keep_last_i_bins:, :]
 
     # select the right cosmological parameters
     msfm_conf = files.load_config(msfm_conf)
+
+    store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+    store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+    n_z_lensing_total = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering_total = len(msfm_conf["survey"]["maglim"]["z_bins"])
+    n_z_lensing_active = n_z_lensing_total if store_lensing else 0
+    n_z_clustering_active = n_z_clustering_total if store_clustering else 0
     all_params = parameters.get_parameters(None, msfm_conf)
     params = parameters.get_parameters(params, msfm_conf)
 
@@ -336,14 +391,16 @@ def get_reshaped_human_summaries(
 
     print("\n")
     LOGGER.info(f"Shapes after probe selection")
-    LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+    if with_fiducial:
+        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
     LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
 
     # concatenate the bins along the last axis
     if concat_bin_dim:
-        fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
+        if with_fiducial:
+            fidu_summs = np.concatenate([fidu_summs[..., i] for i in range(fidu_summs.shape[-1])], axis=-1)
         grid_summs = np.concatenate([grid_summs[..., i] for i in range(grid_summs.shape[-1])], axis=-1)
         if noise_cls is not None:
             noise_cls = np.concatenate([noise_cls[..., i] for i in range(noise_cls.shape[-1])], axis=-1)
@@ -352,17 +409,19 @@ def get_reshaped_human_summaries(
     if summary_type == "peaks":
         if scale_indices is None:
             assert (
-                fidu_summs.shape[-2] == grid_summs.shape[-2]
+                not with_fiducial or fidu_summs.shape[-2] == grid_summs.shape[-2]
             ), "The number of scales must be the same for fiducial and grid"
-            scale_indices = range(fidu_summs.shape[-2])
+            scale_indices = range(fidu_summs.shape[-2]) if with_fiducial else range(grid_summs.shape[-2])
 
         # concatenate the scales along the last axis
-        fidu_summs = np.concatenate([fidu_summs[..., i, :] for i in scale_indices], axis=-1)
+        if with_fiducial:
+            fidu_summs = np.concatenate([fidu_summs[..., i, :] for i in scale_indices], axis=-1)
         grid_summs = np.concatenate([grid_summs[..., i, :] for i in scale_indices], axis=-1)
 
         print("\n")
         LOGGER.info("Shapes after scale selection")
-        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+        if with_fiducial:
+            LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
         LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
 
     # concatenate the examples along the first axis
@@ -378,7 +437,8 @@ def get_reshaped_human_summaries(
 
         print("\n")
         LOGGER.info("Shapes after concatenation")
-        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+        if with_fiducial:
+            LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
         LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
         LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
         LOGGER.info(f"grid_i_sobols = {grid_i_sobols.shape}")
@@ -421,7 +481,8 @@ def get_reshaped_human_summaries(
 
     print("\n")
     LOGGER.info("Shapes after pre-processing")
-    LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
+    if with_fiducial:
+        LOGGER.info(f"fidu_{summary_type} = {fidu_summs.shape}")
     LOGGER.info(f"grid_{summary_type} = {grid_summs.shape}")
     LOGGER.info(f"grid_cosmos = {grid_cosmos.shape}")
 
@@ -477,6 +538,7 @@ def get_binned_power_spectra(
     with_cross_z=True,
     with_cross_probe=None,
     with_gaussian_noise=True,
+    with_fiducial=True,
     bin_indices=None,
     # CLs scale cuts
     l_mins=None,
@@ -510,6 +572,7 @@ def get_binned_power_spectra(
         with_lensing=with_lensing,
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
+        with_fiducial=with_fiducial,
         with_cross_probe=with_cross_probe,
         bin_indices=bin_indices,
         # power spectra: scales
@@ -559,17 +622,19 @@ def get_binned_power_spectra(
         return cls
 
     out_dict = {
-        "fidu/cls_raw": fidu_cls.copy(),
         "grid/cls_raw/train": grid_cls_train.copy(),
         "grid/cls_raw/test": grid_cls_test.copy(),
     }
+    if with_fiducial:
+        out_dict["fidu/cls_raw"] = fidu_cls.copy()
 
-    fidu_cls = _noise_and_log(fidu_cls.copy())
+    if with_fiducial:
+        fidu_cls = _noise_and_log(fidu_cls.copy())
     grid_cls_train = _noise_and_log(grid_cls_train.copy())
     grid_cls_test = _noise_and_log(grid_cls_test.copy())
 
     plotting.plot_human_summary(
-        fidu_cls,
+        fidu_cls if with_fiducial else grid_cls_train,
         grid_cls_train,
         bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
         n_random_indices=n_examples_to_plot,
@@ -582,7 +647,7 @@ def get_binned_power_spectra(
 
     out_dict.update(
         {
-            "fidu/cls": fidu_cls,
+            "fidu/cls": fidu_cls if with_fiducial else None,
             "grid/cls/train": grid_cls_train,
             "grid/cls/test": grid_cls_test,
             "grid/cosmos/train": grid_cosmos_train,
@@ -628,17 +693,25 @@ def get_preprocessed_cl_observation(
 ):
     """To forward model a mock observation like the Buzzards"""
 
-    assert (obs_cl is not None) or (
-        (wl_gamma_map is not None) and (gc_count_map is not None)
-    ), "Either obs_cl or wl_gamma_map and gc_count_map must be provided"
+    assert (obs_cl is not None) or (wl_gamma_map is not None) or (gc_count_map is not None), \
+        "Either obs_cl or wl_gamma_map or gc_count_map must be provided"
 
     msfm_conf = files.load_config(msfm_conf)
+
+    store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+    store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+    n_z_lensing_total = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering_total = len(msfm_conf["survey"]["maglim"]["z_bins"])
+    n_z_lensing_active = n_z_lensing_total if store_lensing else 0
+    n_z_clustering_active = n_z_clustering_total if store_clustering else 0
     dlss_conf = configuration.load_deep_lss_config(dlss_conf)
 
     if l_maxs is None:
-        theta_fwhm = (
-            dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"] + dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"]
-        )
+        theta_fwhm = []
+        if store_lensing:
+            theta_fwhm.extend(dlss_conf["scale_cuts"]["lensing"]["theta_fwhm"])
+        if store_clustering:
+            theta_fwhm.extend(dlss_conf["scale_cuts"]["clustering"]["theta_fwhm"])
         l_maxs = scales.angle_to_ell(np.array(theta_fwhm), arcmin=dlss_conf["scale_cuts"]["arcmin"])
         LOGGER.info(f"Using l_maxs = {l_maxs} from the dlss config")
     if l_mins is None:
@@ -647,8 +720,8 @@ def get_preprocessed_cl_observation(
 
     if obs_cl is None:
         _, obs_cl, _ = observation.forward_model_observation_map(
-            wl_gamma_map=wl_gamma_map,
-            gc_count_map=gc_count_map,
+            wl_gamma_map=wl_gamma_map if store_lensing else None,
+            gc_count_map=gc_count_map if store_clustering else None,
             conf=msfm_conf,
             apply_norm=False,
             with_padding=True,
@@ -657,6 +730,18 @@ def get_preprocessed_cl_observation(
 
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
     # msfm.observation.forward_model_observation_map
+    with_cross_calc = True
+    if not (store_lensing and store_clustering):
+        # if one of them is missing, we don't have inter-probe cross-correlation, 
+        # but power_spectra.smooth_and_bin_cls might still count intra-probe cross-correlations
+        pass
+
+    with_cross_calc = True
+    if not (store_lensing and store_clustering):
+        # if one of them is missing, we don't have inter-probe cross-correlation, 
+        # but power_spectra.smooth_and_bin_cls might still count intra-probe cross-correlations
+        pass
+
     if from_raw_cls:
         LOGGER.warning(f"Applying scale cuts to the raw Cls, this is deprecated")
         obs_cl, _ = power_spectra.smooth_and_bin_cls(
@@ -684,10 +769,32 @@ def get_preprocessed_cl_observation(
     if base_dir is not None:
         noise_cl = input_output.load_cl_white_noise(base_dir)[0]
 
-        white_noise_sigma = (
-            dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"]
-            + dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"]
-        )
+        store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+        store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+
+        n_total_expected = (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
+        if noise_cl.shape[-1] == n_total_expected and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active:
+            total_indices, _ = cross_statistics.get_cross_bin_indices(
+                n_z_lensing=n_z_lensing_total,
+                n_z_clustering=n_z_clustering_total,
+                with_lensing=store_lensing,
+                with_clustering=store_clustering,
+                with_cross_z=True,
+                with_cross_probe=(store_lensing and store_clustering)
+            )
+            noise_cl = noise_cl[..., total_indices]
+            LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
+            
+            if obs_cl.shape[-1] == n_total_expected:
+                obs_cl = obs_cl[..., total_indices]
+                LOGGER.info(f"Subsampled obs_cl from {n_total_expected} to {len(total_indices)} bins")
+
+
+        white_noise_sigma = []
+        if store_lensing:
+            white_noise_sigma.extend(dlss_conf["scale_cuts"]["lensing"]["white_noise_sigma"])
+        if store_clustering:
+            white_noise_sigma.extend(dlss_conf["scale_cuts"]["clustering"]["white_noise_sigma"])
         n_z = len(white_noise_sigma)
         k = 0
         for i in range(n_z):
@@ -695,14 +802,29 @@ def get_preprocessed_cl_observation(
                 if (i == j) or (i < j):
                     noise_cl[:, k] *= white_noise_sigma[i] * white_noise_sigma[j]
                     k += 1
-
-        obs_cl += noise_cl
-        LOGGER.info(f"Adding white noise to the observation")
+            
+        if obs_cl.shape[-1] == noise_cl.shape[-1]:
+            obs_cl += noise_cl
+            LOGGER.info(f"Adding white noise to the observation")
+        else:
+            LOGGER.warning(f"Could not add white noise, shapes {obs_cl.shape} and {noise_cl.shape} do not match.")
     else:
         LOGGER.warning(f"Not adding white noise to the observation!")
 
     if bin_indices is None:
+        n_z_lensing_active = (
+            len(msfm_conf["survey"]["metacal"]["z_bins"])
+            if msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+            else 0
+        )
+        n_z_clustering_active = (
+            len(msfm_conf["survey"]["maglim"]["z_bins"])
+            if msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+            else 0
+        )
         bin_indices, _ = cross_statistics.get_cross_bin_indices(
+            n_z_lensing=n_z_lensing_active,
+            n_z_clustering=n_z_clustering_active,
             with_lensing=with_lensing,
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,

@@ -79,6 +79,7 @@ def get_binned_power_spectra_dset(
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
         with_cross_probe=with_cross_probe,
+        with_fiducial=False,
         with_gaussian_noise=with_gaussian_noise,
         bin_indices=bin_indices,
         # Cls scale cuts
