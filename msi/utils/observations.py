@@ -1,6 +1,3 @@
-from msfm.utils import parameters
-
-
 def add_obs_args(parser, bench_labels_default=None):
     """Add observation inclusion flags to an argument parser (all default off)."""
     parser.add_argument("--include_grid", action="store_true")
@@ -12,6 +9,10 @@ def add_obs_args(parser, bench_labels_default=None):
     parser.add_argument("--bench_labels", nargs="+", default=bench_labels_default or ["bench_fidu"])
 
 
+def _cosmo_dict(params, cosmo_arr):
+    return {str(p): v for p, v in zip(params, cosmo_arr)}
+
+
 def get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, msfm_conf, n_examples=16):
     stride = msfm_conf["analysis"]["grid"].get("n_perms_per_cosmo", 1) * msfm_conf["analysis"].get("n_patches", 1)
     obs_dict = {}
@@ -20,7 +21,7 @@ def get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, msfm_conf, n_ex
         if label in obs_pred_dict and label in obs_cosmo_dict:
             obs_dict[label] = {
                 "pred": obs_pred_dict[label],
-                "cosmo": {str(p): v for p, v in zip(params, obs_cosmo_dict[label])},
+                "cosmo": _cosmo_dict(params, obs_cosmo_dict[label]),
             }
     return obs_dict
 
@@ -33,28 +34,26 @@ def get_des_observations(obs_pred_dict):
     return obs_dict
 
 
-def get_buzzard_observations(obs_pred_dict, params, msfm_conf, labels):
-    fiducials = parameters.get_fiducials(params, msfm_conf)
-    cosmo = {str(p): v for p, v in zip(params, fiducials)}
+def get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, labels):
     obs_dict = {}
     for label in labels:
-        if label in obs_pred_dict:
-            obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": cosmo}
-        else:
+        if label not in obs_pred_dict:
             print(f"Warning: '{label}' not found in predictions, skipping.")
+            continue
+        cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
+        obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": cosmo}
     return obs_dict
 
 
-def get_benchmark_observations(obs_pred_dict, params, msfm_conf, obs_labels):
-    fiducials = parameters.get_fiducials(params, msfm_conf)
-    cosmo = {str(p): v for p, v in zip(params, fiducials)}
+def get_benchmark_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels):
     obs_dict = {}
     for label in obs_labels:
         full_label = f"{label}_mean"
-        if full_label in obs_pred_dict:
-            obs_dict[full_label] = {"pred": obs_pred_dict[full_label], "cosmo": cosmo}
-        else:
+        if full_label not in obs_pred_dict:
             print(f"Warning: '{full_label}' not found in predictions, skipping.")
+            continue
+        cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
+        obs_dict[full_label] = {"pred": obs_pred_dict[full_label], "cosmo": cosmo}
     return obs_dict
 
 
@@ -66,9 +65,9 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
     if args.include_des:
         obs_dict.update(get_des_observations(obs_pred_dict))
     if args.include_buzzard:
-        obs_dict.update(get_buzzard_observations(obs_pred_dict, params, msfm_conf, args.buzzard_labels))
+        obs_dict.update(get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, args.buzzard_labels))
     if args.include_bench:
-        obs_dict.update(get_benchmark_observations(obs_pred_dict, params, msfm_conf, args.bench_labels))
+        obs_dict.update(get_benchmark_observations(obs_pred_dict, obs_cosmo_dict, params, args.bench_labels))
     return obs_dict
 
 
