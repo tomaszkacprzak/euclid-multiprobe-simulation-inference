@@ -100,6 +100,7 @@ def get_reshaped_human_summaries(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
+    ggl_only=False,
     with_grid=True,
     # power spectra specific
     bin_indices=None,
@@ -261,16 +262,21 @@ def get_reshaped_human_summaries(
             try:
                 noise_cls = input_output.load_cl_white_noise(base_dir)
                 with_noise = True
-                
-                n_total_expected = (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
-                if noise_cls.shape[-1] == n_total_expected and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active:
+
+                n_total_expected = (
+                    (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
+                )
+                if (
+                    noise_cls.shape[-1] == n_total_expected
+                    and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active
+                ):
                     total_indices, _ = cross_statistics.get_cross_bin_indices(
                         n_z_lensing=n_z_lensing_total,
                         n_z_clustering=n_z_clustering_total,
                         with_lensing=store_lensing,
                         with_clustering=store_clustering,
                         with_cross_z=True,
-                        with_cross_probe=(store_lensing and store_clustering)
+                        with_cross_probe=(store_lensing and store_clustering),
                     )
                     noise_cls = noise_cls[..., total_indices]
                     LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
@@ -344,6 +350,7 @@ def get_reshaped_human_summaries(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
+            ggl_only=ggl_only,
         )
         LOGGER.info(f"Using the bin names {bin_names}")
 
@@ -537,6 +544,7 @@ def get_binned_power_spectra(
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
+    ggl_only=False,
     with_gaussian_noise=True,
     with_fiducial=True,
     bin_indices=None,
@@ -572,8 +580,9 @@ def get_binned_power_spectra(
         with_lensing=with_lensing,
         with_clustering=with_clustering,
         with_cross_z=with_cross_z,
-        with_fiducial=with_fiducial,
         with_cross_probe=with_cross_probe,
+        ggl_only=ggl_only,
+        with_fiducial=with_fiducial,
         bin_indices=bin_indices,
         # power spectra: scales
         from_raw_cls=False,
@@ -670,11 +679,13 @@ def get_preprocessed_cl_observation(
     base_dir=None,
     from_raw_cls=False,
     nest_in=False,
+    apply_maglim_sys_map=True,
     # selection
     with_lensing=True,
     with_clustering=True,
     with_cross_z=True,
     with_cross_probe=None,
+    ggl_only=False,
     # CLs scale cuts
     l_mins=None,
     l_maxs=None,
@@ -693,8 +704,9 @@ def get_preprocessed_cl_observation(
 ):
     """To forward model a mock observation like the Buzzards"""
 
-    assert (obs_cl is not None) or (wl_gamma_map is not None) or (gc_count_map is not None), \
-        "Either obs_cl or wl_gamma_map or gc_count_map must be provided"
+    assert (
+        (obs_cl is not None) or (wl_gamma_map is not None) or (gc_count_map is not None)
+    ), "Either obs_cl or wl_gamma_map or gc_count_map must be provided"
 
     msfm_conf = files.load_config(msfm_conf)
 
@@ -726,19 +738,20 @@ def get_preprocessed_cl_observation(
             apply_norm=False,
             with_padding=True,
             nest_in=nest_in,
+            apply_maglim_sys_map=apply_maglim_sys_map,
         )
 
     # apply the same transformations as in get_reshaped_human_summaries to an observation as put out by
     # msfm.observation.forward_model_observation_map
     with_cross_calc = True
     if not (store_lensing and store_clustering):
-        # if one of them is missing, we don't have inter-probe cross-correlation, 
+        # if one of them is missing, we don't have inter-probe cross-correlation,
         # but power_spectra.smooth_and_bin_cls might still count intra-probe cross-correlations
         pass
 
     with_cross_calc = True
     if not (store_lensing and store_clustering):
-        # if one of them is missing, we don't have inter-probe cross-correlation, 
+        # if one of them is missing, we don't have inter-probe cross-correlation,
         # but power_spectra.smooth_and_bin_cls might still count intra-probe cross-correlations
         pass
 
@@ -754,16 +767,38 @@ def get_preprocessed_cl_observation(
             fixed_binning=False,
         )
     else:
+        # Bin without smoothing first, then apply the bin-averaged smoothing factor W²(ℓ) per cross-pair.
+        # This matches get_reshaped_human_summaries which multiplies pre-binned Cls by mean(W²) per bin,
+        # rather than computing mean(W²·Cℓ) from raw Cls — keeping training and observation consistent.
+        n_z_smooth = len(l_mins)
         obs_cl, _ = power_spectra.smooth_and_bin_cls(
             obs_cl,
-            l_mins_smoothing=l_mins,
-            l_maxs_smoothing=l_maxs,
+            l_mins_smoothing=[None] * n_z_smooth,
+            l_maxs_smoothing=[None] * n_z_smooth,
             with_cross=True,
             fixed_binning=True,
             n_bins=msfm_conf["analysis"]["power_spectra"]["n_bins"],
             l_min_binning=msfm_conf["analysis"]["power_spectra"]["l_min"],
             l_max_binning=msfm_conf["analysis"]["power_spectra"]["l_max"],
         )
+        ells = np.arange(0, 3 * msfm_conf["analysis"]["n_side"])
+        bins = power_spectra.get_cl_bins(
+            msfm_conf["analysis"]["power_spectra"]["l_min"],
+            msfm_conf["analysis"]["power_spectra"]["l_max"],
+            msfm_conf["analysis"]["power_spectra"]["n_bins"],
+        )
+        k = 0
+        for i in range(n_z_smooth):
+            for j in range(n_z_smooth):
+                if (i == j) or (i < j):
+                    l_min = max(l_mins[i], l_mins[j])
+                    l_max = min(l_maxs[i], l_maxs[j])
+                    smoothing_fac = scales.gaussian_high_pass_factor_alm(ells, l_min=l_min)
+                    smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=l_max)
+                    smoothing_fac = smoothing_fac**2
+                    smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
+                    obs_cl[..., k] *= smoothing_fac
+                    k += 1
 
     # like in get_reshaped_human_summaries
     if base_dir is not None:
@@ -772,23 +807,27 @@ def get_preprocessed_cl_observation(
         store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
         store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
 
-        n_total_expected = (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
-        if noise_cl.shape[-1] == n_total_expected and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active:
+        n_total_expected = (
+            (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
+        )
+        if (
+            noise_cl.shape[-1] == n_total_expected
+            and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active
+        ):
             total_indices, _ = cross_statistics.get_cross_bin_indices(
                 n_z_lensing=n_z_lensing_total,
                 n_z_clustering=n_z_clustering_total,
                 with_lensing=store_lensing,
                 with_clustering=store_clustering,
                 with_cross_z=True,
-                with_cross_probe=(store_lensing and store_clustering)
+                with_cross_probe=(store_lensing and store_clustering),
             )
             noise_cl = noise_cl[..., total_indices]
             LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
-            
+
             if obs_cl.shape[-1] == n_total_expected:
                 obs_cl = obs_cl[..., total_indices]
                 LOGGER.info(f"Subsampled obs_cl from {n_total_expected} to {len(total_indices)} bins")
-
 
         white_noise_sigma = []
         if store_lensing:
@@ -802,7 +841,7 @@ def get_preprocessed_cl_observation(
                 if (i == j) or (i < j):
                     noise_cl[:, k] *= white_noise_sigma[i] * white_noise_sigma[j]
                     k += 1
-            
+
         if obs_cl.shape[-1] == noise_cl.shape[-1]:
             obs_cl += noise_cl
             LOGGER.info(f"Adding white noise to the observation")
@@ -829,6 +868,7 @@ def get_preprocessed_cl_observation(
             with_clustering=with_clustering,
             with_cross_z=with_cross_z,
             with_cross_probe=with_cross_probe,
+            ggl_only=ggl_only,
         )
 
     assert isinstance(bin_indices, (list, np.ndarray)), "bin_indices must be a list or numpy array"
