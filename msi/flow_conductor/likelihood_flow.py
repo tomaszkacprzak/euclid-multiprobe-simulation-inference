@@ -648,7 +648,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             map_location = None
 
         if self.model_dir is not None:
-            loaded = torch.load(self.model_file, map_location=map_location)
+            loaded = torch.load(self.model_file, map_location=map_location, weights_only=False)
             if isinstance(loaded, dict) and "state_dict" in loaded:
                 self.load_state_dict(loaded["state_dict"])
             else:
@@ -693,7 +693,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         if checkpoint_file is None:
             raise ValueError("Insufficient path arguments to determine checkpoint_file.")
-        loaded = torch.load(checkpoint_file, map_location="cpu")
+        loaded = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
 
         if not isinstance(loaded, dict) or "init_kwargs" not in loaded:
             raise ValueError(f"The checkpoint at {checkpoint_file} does not contain the required 'init_kwargs'.")
@@ -1016,7 +1016,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         label=None,
         device=None,
         dont_save=False,
-        method="ensemble",
+        method="individual",
         use_validation_weights=False,
     ):
         """
@@ -1086,6 +1086,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 return self._mcmc_log_posterior(theta_walkers, x_obs, device=device, weights=weights)
 
         if method == "ensemble":
+            LOGGER.info(f"Sampling the posterior from the ensemble using method '{method}'")
             chain = mcmc.run_emcee(
                 log_prob_fn,
                 params,
@@ -1182,7 +1183,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
         if self.model_dir is not None:
             try:
                 # we don't strictly need to load the init_kwargs, but we can verify it's there
-                loaded = torch.load(self.model_file, map_location="cpu")
+                loaded = torch.load(self.model_file, map_location="cpu", weights_only=False)
             except FileNotFoundError:
                 LOGGER.warning(f"Could not load the model from {self.model_file}")
 
@@ -1230,7 +1231,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
             raise ValueError("Insufficient path arguments to determine checkpoint_file.")
 
         try:
-            loaded = torch.load(checkpoint_file, map_location="cpu")
+            loaded = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
         except FileNotFoundError:
             # For backward compatibility where we might have saved individual flows but not the ensemble file itself
             # We can reconstruct it from the first flow if it exists
@@ -1238,7 +1239,7 @@ class LikelihoodFlowEnsemble(LikelihoodBase):
                 flow_0_file = os.path.join(model_dir, "flow_0", f"{LikelihoodFlow.model_name}.pt")
                 if os.path.exists(flow_0_file):
                     LOGGER.warning(f"Could not find {checkpoint_file}, attempting to load from {flow_0_file}")
-                    flow_loaded = torch.load(flow_0_file, map_location="cpu")
+                    flow_loaded = torch.load(flow_0_file, map_location="cpu", weights_only=False)
                     if isinstance(flow_loaded, dict) and "init_kwargs" in flow_loaded:
                         loaded = {"init_kwargs": flow_loaded["init_kwargs"]}
                         # If the old save format had no n_flows in init_kwargs but there are directories
