@@ -1,0 +1,38 @@
+# Smaller sigmoids flow — faster training, simpler optimization landscape.
+#
+# Primary reductions vs. default.yaml:
+#   n_layers 4→2  : biggest stability lever; halves the chained-Jacobian depth
+#   hidden_dim 256→128 : biggest capacity/speed lever; ~4x fewer transform params
+#   n_sigmoids 16→8   : cheaper nonlinearity per layer, modest expressiveness loss
+#
+# Context embedding changes are conservative — theta is low-dimensional (~6-10
+# params) so the embedding is not a bottleneck. dim 32→16 is safe; hidden_dim
+# 64→32 reduces it further but has little effect on overall flow quality.
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+
+transform:
+  n_layers: 2
+  hidden_dim: 128
+  sigmoids:
+    n_sigmoids: 8
+    num_blocks: 2
+    dropout_probability: 0.2
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  scheduler_type: cosine
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4

@@ -1,0 +1,27 @@
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+
+transform:
+  n_layers: 4
+  hidden_dim: 256
+  sigmoids:
+    n_sigmoids: 16
+    num_blocks: 3
+    dropout_probability: 0.2
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  scheduler_type: cosine
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4

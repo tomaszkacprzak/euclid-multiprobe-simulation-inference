@@ -1,0 +1,33 @@
+# Larger sigmoids flow — tests whether default.yaml is underfitting.
+#
+# If posteriors stabilize or sharpen relative to default.yaml, the standard
+# architecture lacks capacity for this summary dimensionality / parameter space.
+# Doubles depth and width; expect ~3x longer training.
+
+context_embedding:
+  dim: 64
+  hidden_dim: 128
+
+transform:
+  n_layers: 6
+  hidden_dim: 512
+  sigmoids:
+    n_sigmoids: 32
+    num_blocks: 4
+    dropout_probability: 0.0
+
+training:
+  n_epochs: 200
+  batch_size: 10000
+  scheduler_type: cosine
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4

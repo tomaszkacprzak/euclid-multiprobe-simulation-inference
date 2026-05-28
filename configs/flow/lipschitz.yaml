@@ -1,0 +1,38 @@
+# Lipschitz-constrained iResBlock flow — architecturally independent cross-check.
+#
+# Uses a completely different transform family (Lipschitz-constrained invertible
+# residual blocks with CSin activation) rather than SVD + masked sigmoids.
+# If this flow gives similar unstable posteriors, the issue almost certainly lies
+# in the summary statistics, not the flow architecture. If it gives cleaner posteriors,
+# the SVD+sigmoids family has a specific pathology for this problem.
+#
+# Note: each iResBlock is computationally heavier than a sigmoid layer, but the
+# per-step cost is partially offset by fewer parameters. Expect similar wall-clock
+# time to default.yaml.
+
+context_embedding:
+  dim: 32
+  hidden_dim: 64
+
+transform:
+  type: lipschitz
+  n_layers: 8
+  hidden_dim: 128
+  lipschitz:
+    lipschitz_coeff: 0.97
+
+training:
+  n_epochs: 100
+  batch_size: 10000
+  scheduler_type: cosine
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000
+
+diagnostics:
+  n_cosmos: 1000
+
+observations:
+  n_grid_examples: 4
