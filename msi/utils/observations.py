@@ -13,16 +13,11 @@ def _cosmo_dict(params, cosmo_arr):
     return {str(p): v for p, v in zip(params, cosmo_arr)}
 
 
-def get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, msfm_conf, n_examples=16):
-    stride = msfm_conf["analysis"]["grid"].get("n_perms_per_cosmo", 1) * msfm_conf["analysis"].get("n_patches", 1)
+def get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, n_examples=16):
     obs_dict = {}
-    for i in range(n_examples):
-        label = f"grid_{i * stride}"
-        if label in obs_pred_dict and label in obs_cosmo_dict:
-            obs_dict[label] = {
-                "pred": obs_pred_dict[label],
-                "cosmo": _cosmo_dict(params, obs_cosmo_dict[label]),
-            }
+    for label in sorted(k for k in obs_pred_dict if k.startswith("grid_"))[:n_examples]:
+        cosmo = _cosmo_dict(params, obs_cosmo_dict[label]) if label in obs_cosmo_dict else None
+        obs_dict[label] = {"pred": obs_pred_dict[label], "cosmo": cosmo}
     return obs_dict
 
 
@@ -61,7 +56,7 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
     """Build obs_dict from CLI args and loaded prediction dictionaries."""
     obs_dict = {}
     if args.include_grid:
-        obs_dict.update(get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, msfm_conf, args.n_grid_examples))
+        obs_dict.update(get_grid_observations(obs_pred_dict, obs_cosmo_dict, params, args.n_grid_examples))
     if args.include_des:
         obs_dict.update(get_des_observations(obs_pred_dict))
     if args.include_buzzard:
@@ -91,11 +86,10 @@ def run_mcmc(flow, obs_dict, n_walkers=1024, n_steps=1000, n_burnin_steps=1000):
                 density=True,
             )
         if "des" in key.lower():
-            lcdm_label = f"{key}_LambdaCDM"
             print(f"\nStarting LambdaCDM run for {key}")
             flow.sample_posterior(
                 obs["pred"],
-                label=lcdm_label,
+                label=key,
                 n_walkers=n_walkers,
                 n_steps=n_steps,
                 n_burnin_steps=n_burnin_steps,
