@@ -105,6 +105,7 @@ def get_reshaped_human_summaries(
     # power spectra specific
     bin_indices=None,
     from_raw_cls=False,
+    skip_smoothing=False,  # when True: skip Gaussian factors + noise loading; noise_cls stays None
     l_mins=None,
     l_maxs=None,
     theta_fwhms=None,
@@ -123,6 +124,7 @@ def get_reshaped_human_summaries(
 ):
     assert summary_type in ["cls", "peaks"], "Only cls and peaks are supported"
     assert with_fiducial or with_grid, "At least one of with_fiducial and with_grid must be True"
+    assert not (from_raw_cls and skip_smoothing), "skip_smoothing only applies when from_raw_cls=False"
 
     msfm_conf = files.load_config(msfm_conf)
 
@@ -137,6 +139,7 @@ def get_reshaped_human_summaries(
         dlss_conf = configuration.load_deep_lss_config(dlss_conf)
 
     noise_cls = None
+    with_noise = False  # set True inside the smoothing block if a noise file is found
 
     if summary_type == "cls":
         if theta_fwhms is None and scales_from_conf:
@@ -248,75 +251,78 @@ def get_reshaped_human_summaries(
             fidu_summs = file_dict[f"fiducial/cls/binned"] if with_fiducial else None
             grid_summs = file_dict[f"grid/cls/binned"]
 
-            LOGGER.info(f"Applying scale cuts to the pre-binned Cls")
+            if not skip_smoothing:
+                LOGGER.info(f"Applying Gaussian scale cuts to the pre-binned Cls")
 
-            # binning
-            ells = np.arange(0, 3 * msfm_conf["analysis"]["n_side"])
-            bins = power_spectra.get_cl_bins(
-                msfm_conf["analysis"]["power_spectra"]["l_min"],
-                msfm_conf["analysis"]["power_spectra"]["l_max"],
-                msfm_conf["analysis"]["power_spectra"]["n_bins"],
-            )
-
-            # white noise
-            try:
-                noise_cls = input_output.load_cl_white_noise(base_dir)
-                with_noise = True
-
-                n_total_expected = (
-                    (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
+                # binning
+                ells = np.arange(0, 3 * msfm_conf["analysis"]["n_side"])
+                bins = power_spectra.get_cl_bins(
+                    msfm_conf["analysis"]["power_spectra"]["l_min"],
+                    msfm_conf["analysis"]["power_spectra"]["l_max"],
+                    msfm_conf["analysis"]["power_spectra"]["n_bins"],
                 )
-                if (
-                    noise_cls.shape[-1] == n_total_expected
-                    and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active
-                ):
-                    total_indices, _ = cross_statistics.get_cross_bin_indices(
-                        n_z_lensing=n_z_lensing_total,
-                        n_z_clustering=n_z_clustering_total,
-                        with_lensing=store_lensing,
-                        with_clustering=store_clustering,
-                        with_cross_z=True,
-                        with_cross_probe=(store_lensing and store_clustering),
+
+                # white noise
+                try:
+                    noise_cls = input_output.load_cl_white_noise(base_dir)
+                    with_noise = True
+
+                    n_total_expected = (
+                        (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
                     )
-                    noise_cls = noise_cls[..., total_indices]
-                    LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
-            except FileNotFoundError:
-                with_noise = False
-                LOGGER.warning(f"No white noise Cls found, continuing without")
+                    if (
+                        noise_cls.shape[-1] == n_total_expected
+                        and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active
+                    ):
+                        total_indices, _ = cross_statistics.get_cross_bin_indices(
+                            n_z_lensing=n_z_lensing_total,
+                            n_z_clustering=n_z_clustering_total,
+                            with_lensing=store_lensing,
+                            with_clustering=store_clustering,
+                            with_cross_z=True,
+                            with_cross_probe=(store_lensing and store_clustering),
+                        )
+                        noise_cls = noise_cls[..., total_indices]
+                        LOGGER.info(f"Subsampled white noise from {n_total_expected} to {len(total_indices)} bins")
+                except FileNotFoundError:
+                    with_noise = False
+                    LOGGER.warning(f"No white noise Cls found, continuing without")
 
-            # apply the smoothing to all (cross) bins, the selection only happens later
-            n_z = n_z_lensing_active + n_z_clustering_active
+                # apply the smoothing to all (cross) bins, the selection only happens later
+                n_z = n_z_lensing_active + n_z_clustering_active
 
-            k = 0
-            for i in range(n_z):
-                for j in range(n_z):
-                    if (i == j) or (i < j):
-                        if l_mins[i] is not None and l_mins[j] is not None:
-                            l_min = max(l_mins[i], l_mins[j])
-                        else:
-                            raise ValueError("l_mins must be provided")
+                k = 0
+                for i in range(n_z):
+                    for j in range(n_z):
+                        if (i == j) or (i < j):
+                            if l_mins[i] is not None and l_mins[j] is not None:
+                                l_min = max(l_mins[i], l_mins[j])
+                            else:
+                                raise ValueError("l_mins must be provided")
 
-                        if l_maxs[i] is not None and l_maxs[j] is not None:
-                            l_max = min(l_maxs[i], l_maxs[j])
-                            theta_fwhms = None
-                        elif theta_fwhms[i] is not None and theta_fwhms[j] is not None:
-                            l_max = None
-                            theta_fwhms = max(theta_fwhms[i], theta_fwhms[j])
-                        else:
-                            raise ValueError("l_maxs or theta_fwhms must be provided")
+                            if l_maxs[i] is not None and l_maxs[j] is not None:
+                                l_max = min(l_maxs[i], l_maxs[j])
+                                theta_fwhms = None
+                            elif theta_fwhms[i] is not None and theta_fwhms[j] is not None:
+                                l_max = None
+                                theta_fwhms = max(theta_fwhms[i], theta_fwhms[j])
+                            else:
+                                raise ValueError("l_maxs or theta_fwhms must be provided")
 
-                        smoothing_fac = scales.gaussian_high_pass_factor_alm(ells, l_min=l_min)
-                        smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=l_max, theta_fwhm=theta_fwhms)
-                        smoothing_fac = smoothing_fac**2
-                        smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
+                            smoothing_fac = scales.gaussian_high_pass_factor_alm(ells, l_min=l_min)
+                            smoothing_fac *= scales.gaussian_low_pass_factor_alm(ells, l_max=l_max, theta_fwhm=theta_fwhms)
+                            smoothing_fac = smoothing_fac**2
+                            smoothing_fac = binned_statistic(ells, smoothing_fac, statistic="mean", bins=bins)[0]
 
-                        if with_fiducial:
-                            fidu_summs[..., k] *= smoothing_fac
-                        grid_summs[..., k] *= smoothing_fac
-                        if with_noise:
-                            noise_cls[..., k] *= white_noise_sigmas[i] * white_noise_sigmas[j]
+                            if with_fiducial:
+                                fidu_summs[..., k] *= smoothing_fac
+                            grid_summs[..., k] *= smoothing_fac
+                            if with_noise:
+                                noise_cls[..., k] *= white_noise_sigmas[i] * white_noise_sigmas[j]
 
-                        k += 1
+                            k += 1
+            else:
+                LOGGER.info("skip_smoothing=True — skipping Gaussian factors and noise; noise_cls stays None")
 
     elif summary_type == "peaks":
         LOGGER.info(f"Loading the pre-binned peak statistics")
@@ -559,8 +565,11 @@ def get_binned_power_spectra(
     # additional preprocessing
     apply_log=True,
     standardize=False,
+    ell_weighting=None,  # None | "ell" | "ell_sq" — multiply C_ℓ by ℓ or ℓ² before log
 ):
     """like msi.utils.dataset.get_binned_power_spectra_dset, but without the TensorFlow dependency and dset"""
+
+    msfm_conf = files.load_config(msfm_conf)
 
     if concat_bin_dim == False:
         LOGGER.warning("concat_example_dim = False should not be used when training networks, it's just for plotting")
@@ -604,9 +613,20 @@ def get_binned_power_spectra(
     i_sort = i_sort[:, 0]
     grid_cls = grid_cls[i_sort]
     grid_cosmos = grid_cosmos[i_sort]
+    grid_i_sobols_sorted = grid_i_sobols[i_sort]                  # (n_cosmos, n_examples_per_cosmo)
+    grid_i_signals       = file_dict["grid/i_signal"][i_sort]      # (n_cosmos, n_examples_per_cosmo)
+    grid_i_noises        = file_dict["grid/i_noise"][i_sort]       # (n_cosmos, n_examples_per_cosmo)
 
     # split along the "examples per cosmo" axis
     i_split = int(train_test_split * grid_cls.shape[1])
+
+    # first TEST example per cosmology for named observations — matches the map-level pipeline which
+    # evaluates on the validation noise split (i_noise=4), stored at index i_split in the HDF5.
+    grid_obs_i_sobol  = grid_i_sobols_sorted[:, i_split]
+    grid_obs_i_signal = grid_i_signals[:, i_split]
+    grid_obs_i_noise  = grid_i_noises[:, i_split]
+    grid_obs_cls_raw  = grid_cls[:, i_split, :].copy()
+    grid_obs_cosmos   = grid_cosmos[:, i_split, :].copy()
 
     grid_cls_train = grid_cls[:, :i_split, :]
     grid_cls_test = grid_cls[:, i_split:, :]
@@ -622,12 +642,31 @@ def get_binned_power_spectra(
 
     rng = np.random.default_rng()
 
+    ell_weights = None
+    if ell_weighting is not None:
+        bins = power_spectra.get_cl_bins(
+            msfm_conf["analysis"]["power_spectra"]["l_min"],
+            msfm_conf["analysis"]["power_spectra"]["l_max"],
+            msfm_conf["analysis"]["power_spectra"]["n_bins"],
+        )
+        ell_centers = np.sqrt(bins[:-1] * bins[1:])
+        n_spectra = grid_cls_train.shape[-1] // len(ell_centers)
+        w = ell_centers if ell_weighting == "ell" else ell_centers ** 2
+        ell_weights = np.tile(w, n_spectra).astype(np.float32)
+        LOGGER.info(f"ell_weighting='{ell_weighting}': weights range [{ell_weights.min():.1f}, {ell_weights.max():.1f}]")
+
     def _noise_and_log(cls):
         if with_gaussian_noise:
             cls += noise_cls[rng.integers(low=0, high=noise_cls.shape[0], size=cls.shape[0])]
-
+        if ell_weights is not None:
+            cls = cls * ell_weights
         cls = preprocess_human_summaries(cls, apply_log=apply_log)[0]
+        return cls
 
+    def _log_ell_only(cls):
+        if ell_weights is not None:
+            cls = cls * ell_weights
+        cls = preprocess_human_summaries(cls, apply_log=apply_log)[0]
         return cls
 
     out_dict = {
@@ -641,6 +680,7 @@ def get_binned_power_spectra(
         fidu_cls = _noise_and_log(fidu_cls.copy())
     grid_cls_train = _noise_and_log(grid_cls_train.copy())
     grid_cls_test = _noise_and_log(grid_cls_test.copy())
+    grid_obs_cls = _log_ell_only(grid_obs_cls_raw.copy())
 
     plotting.plot_human_summary(
         fidu_cls if with_fiducial else grid_cls_train,
@@ -663,6 +703,236 @@ def get_binned_power_spectra(
             "grid/cosmos/test": grid_cosmos_test,
             "noise/cls": noise_cls,
             "grid/i_sobols": grid_i_sobols,
+            "ell_weights": ell_weights,  # None or (n_cls,) float32 array; read by dataset.py
+            "grid/obs/i_sobol":  grid_obs_i_sobol,   # (n_cosmos,)  — example 0 per cosmo, Sobol-sorted
+            "grid/obs/i_signal": grid_obs_i_signal,
+            "grid/obs/i_noise":  grid_obs_i_noise,
+            "grid/obs/cls":      grid_obs_cls,        # log-/ell-transformed, no added noise
+            "grid/obs/cosmos":   grid_obs_cosmos,
+        }
+    )
+
+    return out_dict
+
+
+def _hard_cut_per_spectrum_lmax(n_z_lensing, n_z_clustering, bin_indices, dlss_conf, store_lensing, store_clustering):
+    """Return the effective l_max for each selected spectrum (after probe selection via bin_indices).
+
+    Lensing z-bins occupy indices 0..n_z_lensing-1; clustering bins follow.
+    The per-pair l_max is min(l_max[i], l_max[j]) from the explicit config field.
+    """
+    l_maxs_z = []
+    if store_lensing:
+        l_maxs_z.extend(dlss_conf["scale_cuts"]["lensing"]["l_max"])
+    if store_clustering:
+        l_maxs_z.extend(dlss_conf["scale_cuts"]["clustering"]["l_max"])
+    l_maxs_z = np.array(l_maxs_z)
+
+    n_z = n_z_lensing + n_z_clustering
+    all_pairs = [(i, j) for i in range(n_z) for j in range(n_z) if j >= i]
+    return np.array([min(l_maxs_z[all_pairs[b][0]], l_maxs_z[all_pairs[b][1]]) for b in bin_indices])
+
+
+def _log_hard_cut_info(ell_centers, l_max_per_selected):
+    """Log per-spectrum bin counts and ell ranges after the hard l_max cut."""
+    n_bins_total = len(ell_centers)
+    kept_counts = []
+    for k, lmax_k in enumerate(l_max_per_selected):
+        mask = ell_centers <= lmax_k
+        n_kept = int(mask.sum())
+        kept_counts.append(n_kept)
+        ell_kept = ell_centers[mask]
+        ell_range = f"[{ell_kept[0]:.1f}, {ell_kept[-1]:.1f}]" if n_kept > 0 else "[]"
+        LOGGER.info(f"  spectrum {k:>3d}: l_max={lmax_k:>5.0f}  kept {n_kept:>3d}/{n_bins_total} bins  ell {ell_range}")
+    LOGGER.info(f"Hard cut: {len(l_max_per_selected)} spectra, total kept bins = {sum(kept_counts)} "
+                f"(vs {n_bins_total * len(l_max_per_selected)} without cut)")
+
+
+def get_binned_power_spectra_hard_cut(
+    base_dir,
+    # file
+    file_label=None,
+    # configuration
+    msfm_conf=None,
+    dlss_conf=None,
+    params=None,
+    train_test_split=0.8,
+    n_examples_to_plot=10,
+    cls_from_maps=False,
+    concat_bin_dim=True,
+    # selection
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    ggl_only=False,
+    with_fiducial=True,
+    bin_indices=None,
+    # additional preprocessing
+    apply_log=True,
+    standardize=False,
+    ell_weighting=None,  # None | "ell" | "ell_sq"
+):
+    """Like get_binned_power_spectra but applies a hard scale cut: drops all ℓ bins above
+    min(l_max[i], l_max[j]) for each cross-pair (from the explicit config l_max field) rather
+    than suppressing them with a Gaussian filter + white noise.  No noise is added or returned."""
+
+    msfm_conf = files.load_config(msfm_conf)
+    dlss_conf_loaded = configuration.load_deep_lss_config(dlss_conf)
+
+    store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+    store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+    n_z_lensing_active = len(msfm_conf["survey"]["metacal"]["z_bins"]) if store_lensing else 0
+    n_z_clustering_active = len(msfm_conf["survey"]["maglim"]["z_bins"]) if store_clustering else 0
+
+    # compute bin_indices so we can derive the per-spectrum hard l_max before loading data
+    if bin_indices is None:
+        bin_indices_for_cut, _ = cross_statistics.get_cross_bin_indices(
+            n_z_lensing=n_z_lensing_active,
+            n_z_clustering=n_z_clustering_active,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            ggl_only=ggl_only,
+        )
+    else:
+        bin_indices_for_cut = bin_indices
+
+    l_max_per_selected = _hard_cut_per_spectrum_lmax(
+        n_z_lensing_active,
+        n_z_clustering_active,
+        bin_indices_for_cut,
+        dlss_conf_loaded,
+        store_lensing,
+        store_clustering,
+    )
+
+    # load pre-binned Cls without any Gaussian smoothing; keep bin dim separate for per-spectrum cut
+    fidu_cls, grid_cls, _, grid_cosmos, grid_i_sobols, file_dict, scaler, pca = get_reshaped_human_summaries(
+        base_dir,
+        "cls",
+        file_label=file_label,
+        msfm_conf=msfm_conf,
+        dlss_conf=dlss_conf,
+        params=params,
+        concat_example_dim=False,
+        concat_bin_dim=False,
+        do_plot=False,
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+        ggl_only=ggl_only,
+        with_fiducial=with_fiducial,
+        bin_indices=bin_indices,
+        from_raw_cls=False,
+        skip_smoothing=True,
+        cls_from_maps=cls_from_maps,
+        apply_log=False,
+        standardize=standardize,
+    )
+
+    # grid_cls shape: (n_cosmo, n_examples, n_bins_per_spec, n_selected_spectra)
+    bins_ell = power_spectra.get_cl_bins(
+        msfm_conf["analysis"]["power_spectra"]["l_min"],
+        msfm_conf["analysis"]["power_spectra"]["l_max"],
+        msfm_conf["analysis"]["power_spectra"]["n_bins"],
+    )
+    ell_centers = np.sqrt(bins_ell[:-1] * bins_ell[1:])
+    _log_hard_cut_info(ell_centers, l_max_per_selected)
+
+    def _apply_hard_cut(cls_array):
+        segments = []
+        for k, lmax_k in enumerate(l_max_per_selected):
+            mask = ell_centers <= lmax_k
+            segments.append(cls_array[..., mask, k])
+        return np.concatenate(segments, axis=-1)
+
+    grid_cls = _apply_hard_cut(grid_cls)
+    if with_fiducial and fidu_cls is not None:
+        fidu_cls = _apply_hard_cut(fidu_cls)
+
+    # ell_weights for the hard-cut vector (variable bins per spectrum)
+    ell_weights = None
+    if ell_weighting is not None:
+        w_segments = []
+        for lmax_k in l_max_per_selected:
+            mask = ell_centers <= lmax_k
+            ell_k = ell_centers[mask]
+            w_k = ell_k if ell_weighting == "ell" else ell_k**2
+            w_segments.append(w_k)
+        ell_weights = np.concatenate(w_segments).astype(np.float32)
+        LOGGER.info(f"ell_weighting='{ell_weighting}': weights range [{ell_weights.min():.1f}, {ell_weights.max():.1f}]")
+
+    i_sort = np.argsort(grid_i_sobols, axis=0)[:, 0]
+    grid_cls = grid_cls[i_sort]
+    grid_cosmos = grid_cosmos[i_sort]
+    grid_i_sobols_sorted = grid_i_sobols[i_sort]
+    grid_i_signals       = file_dict["grid/i_signal"][i_sort]
+    grid_i_noises        = file_dict["grid/i_noise"][i_sort]
+
+    i_split = int(train_test_split * grid_cls.shape[1])
+
+    grid_obs_i_sobol  = grid_i_sobols_sorted[:, i_split]
+    grid_obs_i_signal = grid_i_signals[:, i_split]
+    grid_obs_i_noise  = grid_i_noises[:, i_split]
+    grid_obs_cls_raw  = grid_cls[:, i_split, :].copy()
+    grid_obs_cosmos   = grid_cosmos[:, i_split, :].copy()
+    grid_cls_train = grid_cls[:, :i_split, :]
+    grid_cls_test = grid_cls[:, i_split:, :]
+    grid_cosmos_train = grid_cosmos[:, :i_split, :]
+    grid_cosmos_test = grid_cosmos[:, i_split:, :]
+
+    _concat = lambda arr: np.concatenate([arr[i, ...] for i in range(arr.shape[0])], axis=0)
+    grid_cls_train = _concat(grid_cls_train)
+    grid_cls_test = _concat(grid_cls_test)
+    grid_cosmos_train = _concat(grid_cosmos_train)
+    grid_cosmos_test = _concat(grid_cosmos_test)
+
+    def _log_transform(cls):
+        if ell_weights is not None:
+            cls = cls * ell_weights
+        return preprocess_human_summaries(cls, apply_log=apply_log)[0]
+
+    out_dict = {
+        "grid/cls_raw/train": grid_cls_train.copy(),
+        "grid/cls_raw/test": grid_cls_test.copy(),
+    }
+    if with_fiducial and fidu_cls is not None:
+        out_dict["fidu/cls_raw"] = fidu_cls.copy()
+        out_dict["fidu/cls"] = _log_transform(fidu_cls.copy())
+
+    grid_cls_train = _log_transform(grid_cls_train.copy())
+    grid_cls_test = _log_transform(grid_cls_test.copy())
+    grid_obs_cls = _log_transform(grid_obs_cls_raw.copy())
+
+    plotting.plot_human_summary(
+        out_dict.get("fidu/cls", grid_cls_train),
+        grid_cls_train,
+        bin_size=None,  # variable bins per spectrum after hard cut; no uniform separator
+        n_random_indices=n_examples_to_plot,
+        yscale="linear",
+        with_lensing=with_lensing,
+        with_clustering=with_clustering,
+        with_cross_z=with_cross_z,
+        with_cross_probe=with_cross_probe,
+    )
+
+    out_dict.update(
+        {
+            "grid/cls/train": grid_cls_train,
+            "grid/cls/test": grid_cls_test,
+            "grid/cosmos/train": grid_cosmos_train,
+            "grid/cosmos/test": grid_cosmos_test,
+            "noise/cls": None,
+            "grid/i_sobols": grid_i_sobols,
+            "ell_weights": ell_weights,
+            "grid/obs/i_sobol":  grid_obs_i_sobol,
+            "grid/obs/i_signal": grid_obs_i_signal,
+            "grid/obs/i_noise":  grid_obs_i_noise,
+            "grid/obs/cls":      grid_obs_cls,
+            "grid/obs/cosmos":   grid_obs_cosmos,
         }
     )
 
@@ -698,6 +968,7 @@ def get_preprocessed_cl_observation(
     pca_components=None,
     scaler=None,
     pca=None,
+    ell_weighting=None,  # None | "ell" | "ell_sq" — must match training pipeline
     # plotting
     make_plot=True,
     obs_label=None,
@@ -880,6 +1151,17 @@ def get_preprocessed_cl_observation(
     # concatenate the bins along the last axis
     obs_cl = np.concatenate([obs_cl[..., i] for i in range(obs_cl.shape[-1])], axis=-1)
 
+    if ell_weighting is not None:
+        bins = power_spectra.get_cl_bins(
+            msfm_conf["analysis"]["power_spectra"]["l_min"],
+            msfm_conf["analysis"]["power_spectra"]["l_max"],
+            msfm_conf["analysis"]["power_spectra"]["n_bins"],
+        )
+        ell_centers = np.sqrt(bins[:-1] * bins[1:])
+        n_spectra = obs_cl.shape[-1] // len(ell_centers)
+        w = ell_centers if ell_weighting == "ell" else ell_centers ** 2
+        obs_cl = obs_cl * np.tile(w, n_spectra).astype(np.float32)
+
     obs_cl, _, _ = preprocess_human_summaries(
         obs_cl[np.newaxis],
         apply_log=apply_log,
@@ -887,6 +1169,154 @@ def get_preprocessed_cl_observation(
         pca_components=pca_components,
         scaler=scaler,
         pca=pca,
+    )
+
+    if make_plot:
+        plotting.plot_single_power_spectrum(
+            obs_cl,
+            bin_size=msfm_conf["analysis"]["power_spectra"]["n_bins"] - 1,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+        )
+
+    return obs_cl
+
+
+def get_preprocessed_cl_observation_hard_cut(
+    wl_gamma_map=None,
+    gc_count_map=None,
+    obs_cl=None,
+    # configuration
+    msfm_conf=None,
+    dlss_conf=None,
+    base_dir=None,
+    nest_in=False,
+    apply_maglim_sys_map=True,
+    # selection
+    with_lensing=True,
+    with_clustering=True,
+    with_cross_z=True,
+    with_cross_probe=None,
+    ggl_only=False,
+    bin_indices=None,
+    # additional preprocessing
+    apply_log=False,
+    standardize=False,
+    ell_weighting=None,  # None | "ell" | "ell_sq" — must match training pipeline
+    # plotting
+    make_plot=True,
+    obs_label=None,
+):
+    """Like get_preprocessed_cl_observation but applies a hard scale cut instead of
+    Gaussian smoothing + white noise.  Bins above min(l_max[i], l_max[j]) (from the
+    explicit config l_max field) are dropped; no noise is added."""
+
+    assert (
+        (obs_cl is not None) or (wl_gamma_map is not None) or (gc_count_map is not None)
+    ), "Either obs_cl or wl_gamma_map or gc_count_map must be provided"
+
+    msfm_conf = files.load_config(msfm_conf)
+    dlss_conf_loaded = configuration.load_deep_lss_config(dlss_conf)
+
+    store_lensing = msfm_conf.get("analysis", {}).get("modelling", {}).get("lensing", {}).get("store", True)
+    store_clustering = msfm_conf.get("analysis", {}).get("modelling", {}).get("clustering", {}).get("store", True)
+    n_z_lensing_total = len(msfm_conf["survey"]["metacal"]["z_bins"])
+    n_z_clustering_total = len(msfm_conf["survey"]["maglim"]["z_bins"])
+    n_z_lensing_active = n_z_lensing_total if store_lensing else 0
+    n_z_clustering_active = n_z_clustering_total if store_clustering else 0
+    n_z_smooth = n_z_lensing_active + n_z_clustering_active
+
+    if obs_cl is None:
+        _, obs_cl, _ = observation.forward_model_observation_map(
+            wl_gamma_map=wl_gamma_map if store_lensing else None,
+            gc_count_map=gc_count_map if store_clustering else None,
+            conf=msfm_conf,
+            apply_norm=False,
+            with_padding=True,
+            nest_in=nest_in,
+            apply_maglim_sys_map=apply_maglim_sys_map,
+        )
+
+    # bin with the same fixed scheme as the pre-binned training Cls; no smoothing
+    obs_cl, _ = power_spectra.smooth_and_bin_cls(
+        obs_cl,
+        l_mins_smoothing=[None] * n_z_smooth,
+        l_maxs_smoothing=[None] * n_z_smooth,
+        with_cross=True,
+        fixed_binning=True,
+        n_bins=msfm_conf["analysis"]["power_spectra"]["n_bins"],
+        l_min_binning=msfm_conf["analysis"]["power_spectra"]["l_min"],
+        l_max_binning=msfm_conf["analysis"]["power_spectra"]["l_max"],
+    )
+
+    # subsample obs_cl if it was computed for all probes but only a subset is active
+    n_total_expected = (n_z_lensing_total + n_z_clustering_total) * (n_z_lensing_total + n_z_clustering_total + 1) // 2
+    if (
+        obs_cl.shape[-1] == n_total_expected
+        and n_z_lensing_total + n_z_clustering_total != n_z_lensing_active + n_z_clustering_active
+    ):
+        total_indices, _ = cross_statistics.get_cross_bin_indices(
+            n_z_lensing=n_z_lensing_total,
+            n_z_clustering=n_z_clustering_total,
+            with_lensing=store_lensing,
+            with_clustering=store_clustering,
+            with_cross_z=True,
+            with_cross_probe=(store_lensing and store_clustering),
+        )
+        obs_cl = obs_cl[..., total_indices]
+        LOGGER.info(f"Subsampled obs_cl from {n_total_expected} to {len(total_indices)} active pairs")
+
+    # probe selection
+    if bin_indices is None:
+        bin_indices, _ = cross_statistics.get_cross_bin_indices(
+            n_z_lensing=n_z_lensing_active,
+            n_z_clustering=n_z_clustering_active,
+            with_lensing=with_lensing,
+            with_clustering=with_clustering,
+            with_cross_z=with_cross_z,
+            with_cross_probe=with_cross_probe,
+            ggl_only=ggl_only,
+        )
+    obs_cl = obs_cl[..., bin_indices]  # (..., n_bins_per_spec, n_selected_spectra)
+
+    # hard cut per spectrum — must use the same l_max values as the training function
+    l_max_per_selected = _hard_cut_per_spectrum_lmax(
+        n_z_lensing_active,
+        n_z_clustering_active,
+        bin_indices,
+        dlss_conf_loaded,
+        store_lensing,
+        store_clustering,
+    )
+
+    bins_ell = power_spectra.get_cl_bins(
+        msfm_conf["analysis"]["power_spectra"]["l_min"],
+        msfm_conf["analysis"]["power_spectra"]["l_max"],
+        msfm_conf["analysis"]["power_spectra"]["n_bins"],
+    )
+    ell_centers = np.sqrt(bins_ell[:-1] * bins_ell[1:])
+    _log_hard_cut_info(ell_centers, l_max_per_selected)
+
+    segments = []
+    ew_segments = []
+    for k, lmax_k in enumerate(l_max_per_selected):
+        mask = ell_centers <= lmax_k
+        segments.append(obs_cl[..., mask, k])
+        if ell_weighting is not None:
+            ell_k = ell_centers[mask]
+            ew_segments.append(ell_k if ell_weighting == "ell" else ell_k**2)
+    obs_cl = np.concatenate(segments, axis=-1)
+
+    if ell_weighting is not None:
+        ew = np.concatenate(ew_segments).astype(obs_cl.dtype)
+        obs_cl = obs_cl * ew
+
+    obs_cl, _, _ = preprocess_human_summaries(
+        obs_cl[np.newaxis],
+        apply_log=apply_log,
+        standardize=standardize,
     )
 
     if make_plot:
