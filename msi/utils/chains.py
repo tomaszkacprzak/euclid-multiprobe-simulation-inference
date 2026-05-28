@@ -54,7 +54,7 @@ import numpy as np
 import os
 
 from msi.utils import input_output
-from msfm.utils import logger
+from msfm.utils import logger, parameters
 
 LOGGER = logger.get_logger(__file__)
 
@@ -145,7 +145,7 @@ def load_des_y3_key_project_chain(params, probes="3x2pt", cosmo_model="wCDM", ia
                     bta = float(columns[i_bta])
 
                     # TODO are these reasonable values to be hardcoded?
-                    if a2 < 0.1 and bta < 0.1:
+                    if abs(a2) < 0.1 and bta < 0.1:
                         chain.append([float(columns[i_param]) for i_param in i_params])
                         weight.append(float(columns[-1]))
 
@@ -163,3 +163,55 @@ def load_des_y3_key_project_chain(params, probes="3x2pt", cosmo_model="wCDM", ia
     LOGGER.info(f"Loaded DESy3 key project chain containing {len(chain)} samples")
 
     return chain, weight
+
+
+_probe_to_des = {
+    "lensing":    ("1x2pt", "tatt"),
+    "clustering": ("2x2pt", "tatt"),
+    "combined":   ("3x2pt", "nla"),
+    "2x2pt":      ("3x2pt", "nla"),
+    "cross":      ("3x2pt", "nla"),
+}
+
+
+def load_and_shift_des_chain(test_params, probe, msfm_conf):
+    """Load a DES Y3 key project chain and shift it to the fiducial cosmology
+    using the same MAP→fiducial blinding as load_shifted_chain in the notebook.
+
+    Args:
+        test_params (list): Parameter names to load (subset of param_correspondence keys is used).
+        probe (str): Probe name matching a key in _probe_to_des.
+        msfm_conf (dict): msfm config (for fiducial values via parameters.get_fiducials).
+
+    Returns:
+        chain (np.ndarray or None): Shifted samples, shape (n, len(available)).
+        weights (np.ndarray or None): Normalised importance weights.
+        foms (dict): {(p1, p2): int} weighted FoM for each parameter pair.
+        available (list): Subset of test_params that exist in the DES chain.
+    """
+    des_probes, des_ia = _probe_to_des[probe]
+    available = [p for p in test_params if p in param_correspondence]
+    if not available:
+        return None, None, {}, []
+
+    chain, weights = load_des_y3_key_project_chain(available, des_probes, "wCDM", des_ia)
+
+    # MAP estimate: weighted mean of top-1% samples (mirrors find_MAP in plotting.py)
+    w_threshold = np.percentile(weights, 99)
+    high_idx = weights >= w_threshold
+    des_map = np.average(chain[high_idx], weights=weights[high_idx], axis=0)
+
+    chain -= des_map
+    chain += np.array(parameters.get_fiducials(available, msfm_conf))
+
+    # weighted FoM: inverse sqrt of the 2D covariance determinant (eq. 17 in arXiv:2405.10881)
+    foms = {}
+    for i, p1 in enumerate(available):
+        for j, p2 in enumerate(available):
+            if i > j:
+                idx = [available.index(p1), available.index(p2)]
+                cov = np.cov(chain[:, idx].T, aweights=weights)
+                foms[(p1, p2)] = int(np.linalg.det(cov) ** -0.5)
+                LOGGER.info(f"DES FoM_({p1},{p2}) = {foms[(p1, p2)]}")
+
+    return chain, weights, foms, available
