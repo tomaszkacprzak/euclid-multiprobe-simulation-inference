@@ -64,5 +64,5 @@ Stored chains from DES Y3 analyses and figures.
 Notebooks for simulation-based inference via neural likelihood estimation and MCMC sampling. 
 
 ## Companion Repositories
-- Forward modeling: [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model)
-- Informative map-level neural summary statistics: [`y3-deep-lss`](https://github.com/des-science/y3-deep-lss)
+- Forward modeling: [`euclid-multiprobe-simulation-forward-model`](https://github.com/tomaszkacprzak/euclid-multiprobe-simulation-forward-model/)
+- Informative map-level neural summary statistics: [`euclid-deep-lss`](https://github.com/tomaszkacprzak/euclid-deep-lss/)
