@@ -14,8 +14,8 @@ Collection of inference methods to go from arbitrary summary statistics (neural 
 Requires Python >= 3.8, PyTorch (for normalizing flows), and optionally TensorFlow >= 2.0/TensorFlow-Probability (for Gaussian mixture models).
 
 **Main dependencies:**
-- [`multiprobe-simulation-forward-model`](https://github.com/des-science/multiprobe-simulation-forward-model) for utilities and data loading
-- [`y3-deep-lss`](https://github.com/des-science/y3-deep-lss) for neural network summary statistics preprocessing
+- [`euclid-multiprobe-simulation-forward-model`](https://github.com/tomaszkacprzak/euclid-multiprobe-simulation-forward-model/) for utilities and data loading
+- [`euclid-deep-lss`](https://github.com/tomaszkacprzak/euclid-deep-lss/) for neural network summary statistics preprocessing
 
 **Step 1: Install companion packages from GitHub**
 ```bash
