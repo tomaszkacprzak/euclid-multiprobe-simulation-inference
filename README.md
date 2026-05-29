@@ -20,10 +20,10 @@ Requires Python >= 3.8, PyTorch (for normalizing flows), and optionally TensorFl
 **Step 1: Install companion packages from GitHub**
 ```bash
 # Install multiprobe-simulation-forward-model
-pip install git+https://github.com/des-science/multiprobe-simulation-forward-model.git
+pip install git+https://github.com/tomaszkacprzak/euclid-multiprobe-simulation-forward-model.git
 
 # Install y3-deep-lss
-pip install git+https://github.com/des-science/y3-deep-lss.git
+pip install git+https://github.com/tomaszkacprzak/euclid-deep-lss.git
 ```
 
 **Step 2: Install this package**
