@@ -39,7 +39,7 @@ dependencies = [
     "deprecation",
     "trianglechain",
     "icecream",
-    "enflows",
+    #"enflows",
     "sbi",
 ]
 
