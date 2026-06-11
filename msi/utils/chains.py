@@ -166,11 +166,10 @@ def load_des_y3_key_project_chain(params, probes="3x2pt", cosmo_model="wCDM", ia
 
 
 _probe_to_des = {
-    "lensing":    ("1x2pt", "tatt"),
+    "lensing": ("1x2pt", "tatt"),
     "clustering": ("2x2pt", "tatt"),
-    "combined":   ("3x2pt", "nla"),
-    "2x2pt":      ("3x2pt", "nla"),
-    "cross":      ("3x2pt", "nla"),
+    "combined": ("3x2pt", "nla"),
+    "2x2pt": ("2x2pt", "tatt"),
 }
 
 

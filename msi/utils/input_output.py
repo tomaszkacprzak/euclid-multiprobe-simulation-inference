@@ -51,6 +51,7 @@ def load_network_preds(base_dir, model_dir, n_steps=None, file_label=None, preds
         "grid/preds/test",
         "grid/cosmos/test",
         "grid/i_signal/test",
+        # "grid/i_example/test",
         "grid/i_noise/test",
         "grid/i_sobol/test",
     ]
@@ -84,9 +85,11 @@ def load_human_summaries(
     summary_type,
     file_label=None,
     return_raw_cls=False,
-    return_fiducial=True,
+    return_fiducial=False,
     return_grid=True,
     cls_from_maps=False,
+    concat_cls=False,
+    cls_bin_indices=None,
 ):
     LOGGER.timer.start("load_summaries")
     LOGGER.info(f"Loading summaries from {base_dir}")
@@ -108,7 +111,8 @@ def load_human_summaries(
 
     # fiducial
     if return_fiducial:
-        fidu_keys = ["i_signal", "i_noise"]
+        # fidu_keys = ["i_signal", "i_noise"]
+        fidu_keys = ["i_example", "i_noise"]
         if summary_type == "cls":
             # TODO hacky
             if cls_from_maps:
@@ -132,6 +136,7 @@ def load_human_summaries(
     # grid
     if return_grid:
         grid_keys = ["cosmo", "i_signal", "i_noise", "i_sobol"]
+        # grid_keys = ["cosmo", "i_example", "i_noise", "i_sobol"]
         if summary_type == "cls":
             # TODO hacky
             if cls_from_maps:
@@ -154,6 +159,24 @@ def load_human_summaries(
         out_dict["grid/cosmo"] = np.repeat(
             out_dict["grid/cosmo"][:, np.newaxis, :], out_dict["grid/cls/binned"].shape[1], axis=1
         )
+
+    if concat_cls:
+        assert summary_type == "cls", "concat_cls is only supported for summary_type='cls'"
+        # Replicates the probe-pair and cosmo/example concatenation from get_reshaped_human_summaries,
+        # but without any smoothing or scale cuts — binned Cls only.
+        for prefix, has_cosmo_dim in [("grid", True), ("fiducial", False)]:
+            key = f"{prefix}/cls/binned"
+            if key not in out_dict:
+                continue
+            cls = out_dict[key]
+            if cls_bin_indices is not None:
+                cls = cls[..., cls_bin_indices]
+            # (..., n_bins, n_probe_pairs) -> (..., n_bins * n_probe_pairs)
+            cls = np.concatenate([cls[..., i] for i in range(cls.shape[-1])], axis=-1)
+            if has_cosmo_dim:
+                # (n_cosmos, n_examples, n_cls_dims) -> (n_cosmos * n_examples, n_cls_dims)
+                cls = np.concatenate([cls[i] for i in range(cls.shape[0])], axis=0)
+            out_dict[key] = cls
 
     LOGGER.info(f"Done loading the summaries after {LOGGER.timer.elapsed('load_summaries')}")
     return out_dict
@@ -184,15 +207,21 @@ def load_network_preds_simple(pred_file):
         LOGGER.info(f"grid_cosmos.shape = {grid_cosmos.shape}")
 
         obs_preds = {}
-        for key, value in f["obs/preds"].items():
-            value = value[:]
+        try:
+            for key, value in f["obs/preds"].items():
+                value = value[:]
 
-            LOGGER.info(f"{key} with shape {value.shape}")
-            obs_preds[key] = value
+                LOGGER.info(f"{key} with shape {value.shape}")
+                obs_preds[key] = value
+        except KeyError:
+            LOGGER.warning("No observation predictions found.")
 
         obs_cosmos = {}
-        for key, value in f["obs/cosmos"].items():
-            value = value[:]
-            obs_cosmos[key] = value
+        try:
+            for key, value in f["obs/cosmos"].items():
+                value = value[:]
+                obs_cosmos[key] = value
+        except KeyError:
+            LOGGER.warning("No observation cosmos found.")
 
     return grid_preds, grid_cosmos, obs_preds, obs_cosmos

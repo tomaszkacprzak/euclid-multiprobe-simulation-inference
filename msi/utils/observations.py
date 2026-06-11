@@ -1,12 +1,12 @@
-def add_obs_args(parser, bench_labels_default=None):
+def add_obs_args(parser, mock_labels_default=None):
     """Add observation inclusion flags to an argument parser (all default off)."""
     parser.add_argument("--include_grid", action="store_true")
     parser.add_argument("--n_grid_examples", type=int, default=16)
     parser.add_argument("--include_des", action="store_true")
     parser.add_argument("--include_buzzard", action="store_true")
     parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
-    parser.add_argument("--include_bench", action="store_true")
-    parser.add_argument("--bench_labels", nargs="+", default=bench_labels_default or ["bench_fidu"])
+    parser.add_argument("--include_mocks", action="store_true")
+    parser.add_argument("--mock_labels", nargs="+", default=mock_labels_default or ["fiducial_bench"])
 
 
 def _cosmo_dict(params, cosmo_arr):
@@ -40,7 +40,7 @@ def get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, labels):
     return obs_dict
 
 
-def get_benchmark_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels):
+def get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, obs_labels):
     obs_dict = {}
     for label in obs_labels:
         full_label = f"{label}_mean"
@@ -61,8 +61,8 @@ def collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
         obs_dict.update(get_des_observations(obs_pred_dict))
     if args.include_buzzard:
         obs_dict.update(get_buzzard_observations(obs_pred_dict, obs_cosmo_dict, params, args.buzzard_labels))
-    if args.include_bench:
-        obs_dict.update(get_benchmark_observations(obs_pred_dict, obs_cosmo_dict, params, args.bench_labels))
+    if args.include_mocks:
+        obs_dict.update(get_mock_observations(obs_pred_dict, obs_cosmo_dict, params, args.mock_labels))
     return obs_dict
 
 

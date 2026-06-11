@@ -4,8 +4,12 @@
 Created June 2025
 Author: Arne Thomsen
 
-Sample the MCMC posterior for N random observations from the CosmoGrid for posterior-level coverage testing. This is 
+Sample the MCMC posterior for N random observations from the CosmoGrid for posterior-level coverage testing. This is
 meant for CPU nodes.
+
+For a flow trained on combined maps+Cls summaries (run_inference.py --out_dir_2, see
+y3-deep-lss/submissions/clariden/combined_inference.sh), also pass --preds_file_2 pointing at the
+second model's preds_*.h5, so the held-out validation split can be faithfully reproduced.
 
 example usage:
 
@@ -31,12 +35,11 @@ esub run_mcmc_for_coverage_tests.py \
 """
 
 import numpy as np
-import torch, os, argparse, warnings, h5py, yaml, time
+import torch, os, argparse, warnings, h5py, time
 
 from msfm.utils import logger
 
-from msi.utils import preprocessing
-from msi.flow_conductor import architecture
+from msi.utils import flow as flow_utils
 from msi.flow_conductor.likelihood_flow import LikelihoodFlow
 
 
@@ -84,6 +87,14 @@ def setup(args):
         help="directory containing the predictions of the compression network",
     )
     parser.add_argument(
+        "--preds_file_2",
+        type=str,
+        default=None,
+        help="optional second model's predictions file; its summary is concatenated feature-wise "
+        "with the primary one's, e.g. to reproduce a flow trained on combined maps+Cls summaries "
+        "via run_inference.py's --out_dir_2. Must match what the flow at --flow_dir was trained on.",
+    )
+    parser.add_argument(
         "--flow_dir",
         type=str,
         required=True,
@@ -114,12 +125,6 @@ def setup(args):
         type=int,
         default=60,
         help="set the maximal amount of time to sleep before copying to avoid clashes",
-    )
-    parser.add_argument(
-        "--torch_seed",
-        type=int,
-        default=7,
-        help="seed for the torch random number generator, used for the shape and Poisson noise",
     )
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
 
@@ -194,105 +199,33 @@ def main(indices, args):
 
 
 def _set_up_flow(args):
-    """Like in the jupyter notebook where this flow has been trained"""
+    """Restore the trained flow and reproduce its held-out validation split for coverage testing.
 
-    # constants
-    if "lensing" in args.preds_file:
-        params = ["Om", "s8", "w0", "Aia", "n_Aia", "bta"]
-    elif "clustering" in args.preds_file:
-        params = ["Om", "s8", "w0", "bg1", "bg2", "bg3", "bg4"]
-    elif "combined" in args.preds_file:
-        params = ["Om", "s8", "w0", "Aia", "n_Aia", "bta", "bg1", "bg2", "bg3", "bg4"]
-    else:
-        raise ValueError(f"Unknown prediction file {args.preds_file}")
+    LikelihoodFlow._prepare_data's train/validation split is made deterministic and grouped by
+    signal realization (group_ids=i_signal): the unique signal ids are sorted and partitioned into
+    a train and a validation fraction, so no signal realization -- regardless of its noise
+    realizations -- appears in both sets. The split therefore depends only on the content and row
+    order of (x, theta, i_signal), not on any random seed, so grid_preds/grid_cosmos/i_signal must
+    be (re)built exactly as run_inference.py built them at training time -- hence reusing
+    flow_utils.load_grid_summaries. This guarantees the mock observations drawn from the
+    reconstructed validation set were seen neither by the compression network nor by the flow.
+    """
+    grid_preds, grid_cosmos, _, _, i_signal = flow_utils.load_grid_summaries(args.preds_file, args.preds_file_2)
 
-    model_dir = os.path.dirname(args.preds_file)
-    with open(os.path.join(model_dir, "configs.yaml"), "r") as f:
-        net_conf, dlss_conf, msfm_conf = list(yaml.load_all(f, Loader=yaml.FullLoader))
+    model = LikelihoodFlow.from_checkpoint(model_dir=args.flow_dir, device="cpu")
 
-    _, grid_preds, grid_cosmos, _ = preprocessing.get_reshaped_network_preds(
-        "",
-        "",
-        preds_file=args.preds_file,
-        with_fidu=False,
-    )
-
-
-    # NOTE this is hacky, the parameters entered here have to match the ones in the weights file
-
-    # # shared hyperparameters
-    # context_embedding_dim = 32
-
-    # # input dimensions
-    # x_dim = grid_preds.shape[-1]
-    # theta_dim = grid_cosmos.shape[-1]
-
-    # embedding_net = architecture.get_context_embedding_net(
-    #     context_dim=theta_dim,
-    #     context_embedding_dim=context_embedding_dim,
-    #     hidden_dim=64,
-    #     n_blocks=3,
-    #     dropout_probability=0.1,
-    #     use_batch_norm=False,
-    # )
-
-    # base_dist = architecture.get_normal_dist(
-    #     feature_dim=x_dim,
-    # )
-
-    # transform = architecture.get_sigmoids_transform(
-    #     feature_dim=x_dim,
-    #     context_embedding_dim=context_embedding_dim,
-    #     n_layers=4,
-    #     hidden_dim=256,
-    #     svd_kwargs={},
-    #     sigmoids_kwargs={
-    #         "n_sigmoids": 16,
-    #         "num_blocks": 3,
-    #         "dropout_probability": 0.1,
-    #     },
-    # )
-
-    # transform = architecture.get_lipschitz_transform(
-    #     feature_dim=x_dim,
-    #     context_embedding_dim=context_embedding_dim,
-    #     n_layers=4,
-    #     hidden_dim=256,
-    #     # hidden_dim=512,
-    # )
-
-    # model = LikelihoodFlow(
-    #     params,
-    #     msfm_conf,
-    #     embedding_net=embedding_net,
-    #     base_dist=base_dist,
-    #     transform=transform,
-    #     model_dir=args.flow_dir,
-    #     load_existing=True,
-    #     device="cpu",
-    #     torch_seed=args.torch_seed,
-    # )
-
-    model = LikelihoodFlow(
-        params, 
-        msfm_conf, 
-        feature_dim=grid_preds.shape[-1],    
-        model_dir=args.flow_dir, 
-        load_existing=True,
-        device="cpu",
-        torch_seed=args.torch_seed,
-    )
-
-    # get the correct random split of the validation data
+    # get the correct signal-grouped split of the validation data
     model._prepare_data(
         x=grid_preds,
         theta=grid_cosmos,
         batch_size=10000,
         vali_split=0.1,
+        group_ids=i_signal,
     )
 
     x_vali = model.vali_dset.dataset.tensors[0][model.vali_dset.indices]
     theta_vali = model.vali_dset.dataset.tensors[1][model.vali_dset.indices]
+    LOGGER.info(f"Reconstructed {len(x_vali)} held-out validation examples for coverage testing")
 
     return model, x_vali, theta_vali
 

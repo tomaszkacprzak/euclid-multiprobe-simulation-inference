@@ -12,7 +12,7 @@ import numpy as np
 
 import torch
 from torch import optim
-from torch.utils.data import TensorDataset, DataLoader, random_split
+from torch.utils.data import TensorDataset, DataLoader, Subset, random_split
 
 from enflows.flows import Flow
 
@@ -165,6 +165,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         min_delta=1e-4,
         save_model=True,
         seed=None,
+        group_ids=None,
         run_c2st=False,
         c2st_hidden_dim=64,
         c2st_n_epochs=50,
@@ -192,6 +193,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
                 early stopping. Defaults to 0.05.
             save_model (bool, optional): Whether to save the model after training. Defaults to True.
             seed (int, optional): The seed for the random data split. Defaults to None, then self.torch_seed is used.
+                Ignored when `group_ids` is given.
+            group_ids (numpy.ndarray, optional): 1D array aligned row-for-row with `x`/`theta` (e.g. `i_signal`)
+                used to make the train/validation split deterministic and group-aware -- see `_prepare_data`.
             run_c2st (bool, optional): Whether to run a Classifier Two-Sample Test on the validation set after
                 training. Trains a small MLP to distinguish real validation pairs (x, theta) from flow-generated
                 pairs (x_gen, theta). An accuracy close to 0.5 indicates the flow has learned the conditional
@@ -203,7 +207,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
         n_examples = x.shape[0]
         LOGGER.info(f"batch size = {batch_size} -> {n_examples // batch_size} steps per epoch for {n_epochs} epochs")
 
-        self._prepare_data(x, theta, batch_size, vali_split, seed=seed)
+        self._prepare_data(x, theta, batch_size, vali_split, seed=seed, group_ids=group_ids)
 
         # optimizer
         self.clip_by_global_norm = clip_by_global_norm
@@ -371,7 +375,7 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         return accuracy
 
-    def _prepare_data(self, x, theta, batch_size, vali_split, seed=None):
+    def _prepare_data(self, x, theta, batch_size, vali_split, seed=None, group_ids=None):
         """
         Prepare the data for training and validation.
 
@@ -380,7 +384,17 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             theta (numpy.ndarray): The input context (cosmological parameters).
             batch_size (int): Batch size for training and validation.
             vali_split (float): Proportion of data to be used for validation.
-            seed (int, optional): The seed for the random split. Defaults to None.
+            seed (int, optional): The seed for the random split. Defaults to None. Ignored when
+                `group_ids` is given, since that split is fully deterministic.
+            group_ids (numpy.ndarray, optional): 1D array aligned row-for-row with `x`/`theta`
+                (e.g. `i_signal`). When given, the split is made deterministic and group-aware:
+                the unique id values are sorted and partitioned into a train and a validation
+                fraction (mirroring `_parse_cls_indices` in msi.utils.preprocessing), and every
+                row is assigned to whichever set its group id falls into. This guarantees that no
+                group (e.g. signal realization) appears in both the training and validation set,
+                which a plain row-level random split cannot guarantee when groups have multiple
+                rows (e.g. several noise realizations per signal). When omitted, falls back to
+                the previous row-level `random_split` behaviour.
 
         Returns:
             None
@@ -394,9 +408,22 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         dset = TensorDataset(x, theta)
 
-        self.train_dset, self.vali_dset = random_split(
-            dset, [1 - vali_split, vali_split], torch.Generator().manual_seed(seed)
-        )
+        if group_ids is not None:
+            unique_ids = np.unique(group_ids)
+            split = int((1 - vali_split) * len(unique_ids))
+            train_ids, vali_ids = unique_ids[:split], unique_ids[split:]
+            train_idx = np.where(np.isin(group_ids, train_ids))[0]
+            vali_idx = np.where(np.isin(group_ids, vali_ids))[0]
+            LOGGER.info(
+                f"Splitting by group id into {len(train_ids)} train / {len(vali_ids)} vali groups "
+                f"({len(train_idx)} / {len(vali_idx)} rows)"
+            )
+            self.train_dset = Subset(dset, train_idx)
+            self.vali_dset = Subset(dset, vali_idx)
+        else:
+            self.train_dset, self.vali_dset = random_split(
+                dset, [1 - vali_split, vali_split], torch.Generator().manual_seed(seed)
+            )
 
         self.train_loader = DataLoader(self.train_dset, batch_size, shuffle=True, drop_last=True)
         self.vali_loader = DataLoader(self.vali_dset, batch_size, shuffle=False, drop_last=True)

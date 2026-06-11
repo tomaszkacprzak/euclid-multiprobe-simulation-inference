@@ -15,7 +15,8 @@ def get_binned_power_spectra_dset(
     msfm_conf=None,
     dlss_conf=None,
     params=None,
-    train_test_split=0.8,
+    signal_indices=None,
+    noise_indices=0.8,
     n_examples_to_plot=10,
     cls_from_maps=False,
     # tf.data
@@ -45,6 +46,8 @@ def get_binned_power_spectra_dset(
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq" — multiply C_ℓ by ℓ or ℓ² before log
+    # scale cut variant: "soft" → Gaussian smoothing; "soft_pruned" → prune noise-dominated bins
+    scale_cut=None,
 ):
     if probe == "lensing":
         with_clustering = False
@@ -65,6 +68,7 @@ def get_binned_power_spectra_dset(
             with_cross_probe = True
 
     out_dict = preprocessing.get_binned_power_spectra(
+        scale_cut=scale_cut,
         base_dir=base_dir,
         # file
         file_label=file_label,
@@ -72,7 +76,8 @@ def get_binned_power_spectra_dset(
         msfm_conf=msfm_conf,
         dlss_conf=dlss_conf,
         params=params,
-        train_test_split=train_test_split,
+        signal_indices=signal_indices,
+        noise_indices=noise_indices,
         n_examples_to_plot=n_examples_to_plot,
         cls_from_maps=cls_from_maps,
         concat_bin_dim=True,
@@ -167,7 +172,8 @@ def get_binned_power_spectra_dset_hard_cut(
     msfm_conf=None,
     dlss_conf=None,
     params=None,
-    train_test_split=0.8,
+    signal_indices=None,
+    noise_indices=0.8,
     n_examples_to_plot=10,
     cls_from_maps=False,
     # tf.data
@@ -188,6 +194,7 @@ def get_binned_power_spectra_dset_hard_cut(
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq"
+    n_extra_bins=0,      # 0 → hard cut; 1 → hard_conservative
 ):
     """Hard scale cut variant of get_binned_power_spectra_dset.
 
@@ -220,7 +227,8 @@ def get_binned_power_spectra_dset_hard_cut(
         msfm_conf=msfm_conf,
         dlss_conf=dlss_conf,
         params=params,
-        train_test_split=train_test_split,
+        signal_indices=signal_indices,
+        noise_indices=noise_indices,
         n_examples_to_plot=n_examples_to_plot,
         cls_from_maps=cls_from_maps,
         concat_bin_dim=True,
@@ -234,6 +242,7 @@ def get_binned_power_spectra_dset_hard_cut(
         apply_log=apply_log,
         standardize=standardize,
         ell_weighting=ell_weighting,
+        n_extra_bins=n_extra_bins,
     )
 
     for key in out_dict:
@@ -282,3 +291,15 @@ def get_binned_power_spectra_dset_hard_cut(
     )
 
     return dset_train, dset_test, out_dict
+
+
+def get_binned_power_spectra_dset_for_scale_cut(scale_cut, **kwargs):
+    """Unified entry point that dispatches to the appropriate scale-cut variant.
+
+    scale_cut: "hard" | "hard_conservative" | "none" | "soft_pruned" | "soft"
+    """
+    if scale_cut in ("hard", "none"):
+        return get_binned_power_spectra_dset_hard_cut(n_extra_bins=0, **kwargs)
+    if scale_cut == "hard_conservative":
+        return get_binned_power_spectra_dset_hard_cut(n_extra_bins=1, **kwargs)
+    return get_binned_power_spectra_dset(scale_cut=scale_cut, **kwargs)
