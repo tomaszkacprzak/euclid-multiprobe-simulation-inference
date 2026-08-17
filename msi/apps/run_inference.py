@@ -1,12 +1,7 @@
-import argparse
 import os
 
 import yaml
 
-from msfm.utils import files as msfm_files
-from msfm.utils.input_output import read_yaml
-from msi.flow_conductor.likelihood_flow import LikelihoodFlow
-from msi.utils import flow as flow_utils
 from msi.utils import observations
 
 
@@ -16,6 +11,9 @@ def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
     configs.yaml always ends with [..., dlss_conf, msfm_conf] regardless of whether it
     was written by the map or Cls training script (3-doc or 4-doc format).
     """
+    from msfm.utils import files as msfm_files
+    from msfm.utils.input_output import read_yaml
+
     if msfm_config_path and dlss_config_path:
         msfm_conf = msfm_files.load_config(msfm_config_path)
         dlss_conf = read_yaml(dlss_config_path)
@@ -27,69 +25,87 @@ def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
     return dlss_conf, msfm_conf
 
 
-def setup():
-    parser = argparse.ArgumentParser(
-        description="Normalizing flow inference on network summary statistics (maps or Cls)."
-    )
-    parser.add_argument("--out_dir", required=True)
-    parser.add_argument("--model_name", default="model")
+def configure_parser(parser):
+    """Add inference arguments to an ``argparse`` parser."""
+    parser.add_argument("--out-dir", "--out_dir", dest="out_dir", required=True)
+    parser.add_argument("--model-name", "--model_name", dest="model_name", default="model")
     parser.add_argument(
+        "--out-dir-2",
         "--out_dir_2",
+        dest="out_dir_2",
         default=None,
         help="Optional second model's out_dir; its summary is concatenated feature-wise with the "
         "primary model's summary, e.g. to combine a maps-level and a Cls-level model.",
     )
-    parser.add_argument("--model_name_2", default="model")
-    parser.add_argument("--n_steps_2", type=int, default=None)
+    parser.add_argument("--model-name-2", "--model_name_2", dest="model_name_2", default="model")
+    parser.add_argument("--n-steps-2", "--n_steps_2", dest="n_steps_2", type=int, default=None)
     # Optional explicit config overrides (Cls path); falls back to pred_dir/configs.yaml
-    parser.add_argument("--msfm_config", default=None)
-    parser.add_argument("--dlss_config", default=None)
+    parser.add_argument("--msfm-config", "--msfm_config", dest="msfm_config", default=None)
+    parser.add_argument("--dlss-config", "--dlss_config", dest="dlss_config", default=None)
     parser.add_argument(
+        "--n-steps",
         "--n_steps",
+        dest="n_steps",
         type=int,
         default=None,
         help="Prediction file step count; auto-detects the largest preds_*.h5 if omitted.",
     )
     parser.add_argument(
+        "--n-steps-multi",
         "--n_steps_multi",
+        dest="n_steps_multi",
         nargs="+",
         type=int,
         default=None,
         help="Combine predictions from these specific training-step counts (feature-wise concatenation).",
     )
     parser.add_argument(
+        "--n-steps-all",
         "--n_steps_all",
+        dest="n_steps_all",
         action="store_true",
         help="Combine predictions from ALL preds_*.h5 files found in the model directory.",
     )
     parser.add_argument(
+        "--pca-compress",
         "--pca_compress",
+        dest="pca_compress",
         action="store_true",
         help="After concatenating multi-step summaries, apply PCA to compress back to single-run dimensionality.",
     )
     parser.add_argument(
+        "--flow-config",
         "--flow_config",
+        dest="flow_config",
         default=None,
         help="Path to flow YAML config; uses hardcoded defaults if omitted.",
     )
     parser.add_argument(
+        "--load-flow",
         "--load_flow",
+        dest="load_flow",
         action="store_true",
         help="Load existing flow checkpoint instead of training a new one.",
     )
     parser.add_argument(
+        "--flow-label",
         "--flow_label",
+        dest="flow_label",
         default="",
         help="Prefix for the flow checkpoint directory, e.g. 'larger' saves to "
         "pred_dir/larger_likelihood_flow_{n_steps}/. Useful when comparing multiple "
         "flow configs on the same prediction file.",
     )
     observations.add_obs_args(parser)
-    return parser.parse_args()
+    return parser
 
 
-def main():
-    args = setup()
+def main(args):
+    """Run the inference workload using parsed command-line arguments."""
+    from msfm.utils.input_output import read_yaml
+
+    from msi.flow_conductor.likelihood_flow import LikelihoodFlow
+    from msi.utils import flow as flow_utils
 
     is_multi = args.n_steps_multi is not None or args.n_steps_all
     if args.n_steps_multi is not None and args.n_steps_all:
@@ -125,8 +141,15 @@ def main():
             flow = LikelihoodFlow.from_checkpoint(out_dir=pred_dir, prefix=prefix, suffix=suffix)
         else:
             flow = flow_utils.build_flow(
-                params, msfm_conf, pred_dir, n_steps_label, grid_preds, grid_cosmos, flow_conf,
-                prefix=prefix, i_signal=i_signal,
+                params,
+                msfm_conf,
+                pred_dir,
+                n_steps_label,
+                grid_preds,
+                grid_cosmos,
+                flow_conf,
+                prefix=prefix,
+                i_signal=i_signal,
             )
     else:
         pred_dir, pred_file, n_steps = flow_utils.resolve_pred_file(args.out_dir, args.model_name, args.n_steps)
@@ -147,7 +170,15 @@ def main():
             flow = LikelihoodFlow.from_checkpoint(out_dir=pred_dir, prefix=prefix, suffix=suffix)
         else:
             flow = flow_utils.build_flow(
-                params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, flow_conf, prefix=prefix, i_signal=i_signal
+                params,
+                msfm_conf,
+                pred_dir,
+                n_steps,
+                grid_preds,
+                grid_cosmos,
+                flow_conf,
+                prefix=prefix,
+                i_signal=i_signal,
             )
 
     obs_dict = observations.collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
@@ -163,7 +194,3 @@ def main():
         )
     except Exception as e:
         print(f"ERROR: run_mcmc failed ({type(e).__name__}: {e})")
-
-
-if __name__ == "__main__":
-    main()

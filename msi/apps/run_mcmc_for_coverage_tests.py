@@ -34,29 +34,37 @@ esub run_mcmc_for_coverage_tests.py \
 
 """
 
+import os
+import logging
+import time
+import warnings
+
+import h5py
 import numpy as np
-import torch, os, argparse, warnings, h5py, time
+import torch
 
-from msfm.utils import logger
-
-from msi.utils import flow as flow_utils
-from msi.flow_conductor.likelihood_flow import LikelihoodFlow
-
+from tqdm.auto import tqdm
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("once", category=UserWarning)
-LOGGER = logger.get_logger(__file__)
+LOGGER = logging.getLogger(__name__)
+
+
+def _configure_logging(verbosity):
+    """Configure coverage-workflow logging from a CLI level name."""
+    logging.basicConfig(level=getattr(logging, verbosity.upper()))
+    LOGGER.setLevel(getattr(logging, verbosity.upper()))
 
 
 def get_tasks(args):
-    args = setup(args)
+    args = parse_args(args)
 
     return list(range(args.n_sims))
 
 
 def resources(args):
-    args = setup(args)
+    args = parse_args(args)
 
     if args.cluster == "perlmutter":
         # because of hyperthreading, there's a total of 256 threads per node
@@ -76,18 +84,20 @@ def resources(args):
     return resources
 
 
-def setup(args):
-    description = "evaluate the power spectra from the input pipelines"
-    parser = argparse.ArgumentParser(description=description, add_help=True)
-
+def configure_parser(parser, include_execution_options=True):
+    """Add coverage-test arguments to an ``argparse`` parser."""
     parser.add_argument(
+        "--preds-file",
         "--preds_file",
+        dest="preds_file",
         type=str,
         required=True,
         help="directory containing the predictions of the compression network",
     )
     parser.add_argument(
+        "--preds-file-2",
         "--preds_file_2",
+        dest="preds_file_2",
         type=str,
         default=None,
         help="optional second model's predictions file; its summary is concatenated feature-wise "
@@ -95,13 +105,17 @@ def setup(args):
         "via run_inference.py's --out_dir_2. Must match what the flow at --flow_dir was trained on.",
     )
     parser.add_argument(
+        "--flow-dir",
         "--flow_dir",
+        dest="flow_dir",
         type=str,
         required=True,
         help="directory containing the flow network",
     )
     parser.add_argument(
+        "--n-sims",
         "--n_sims",
+        dest="n_sims",
         type=int,
         default=1000,
     )
@@ -121,25 +135,49 @@ def setup(args):
         help="the cluster to execute on",
     )
     parser.add_argument(
+        "--max-sleep",
         "--max_sleep",
+        dest="max_sleep",
         type=int,
         default=60,
         help="set the maximal amount of time to sleep before copying to avoid clashes",
     )
     parser.add_argument("--debug", action="store_true", help="activate debug mode")
 
+    if include_execution_options:
+        parser.add_argument(
+            "--indices",
+            type=int,
+            nargs="+",
+            help="simulation indices to process (defaults to all indices)",
+        )
+        parser.add_argument(
+            "--no-merge",
+            action="store_true",
+            help="leave per-simulation files in place instead of merging them",
+        )
+    return parser
+
+
+def parse_args(args):
+    """Parse legacy scheduler arguments used by ``esub`` callbacks."""
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=True)
+    configure_parser(parser, include_execution_options=False)
+
     args, _ = parser.parse_known_args(args)
 
     # print arguments
-    logger.set_all_loggers_level(args.verbosity)
+    _configure_logging(args.verbosity)
     for key, value in vars(args).items():
         LOGGER.info(f"{key} = {value}")
 
     return args
 
 
-def main(indices, args):
-    args = setup(args)
+def _run_indices(indices, args):
+    """Run the coverage sampling workload for ``indices``."""
 
     n_sims = args.n_sims
     n_walkers = 1024
@@ -198,6 +236,20 @@ def main(indices, args):
         yield index
 
 
+def main(args):
+    """Run coverage sampling and merge results unless explicitly disabled."""
+    _configure_logging(args.verbosity)
+    for key, value in vars(args).items():
+        LOGGER.info(f"{key} = {value}")
+
+    indices = args.indices if args.indices is not None else list(range(args.n_sims))
+    for _ in _run_indices(indices, args):
+        pass
+    if not args.no_merge:
+        merge_files(indices, args)
+    return 0
+
+
 def _set_up_flow(args):
     """Restore the trained flow and reproduce its held-out validation split for coverage testing.
 
@@ -210,6 +262,9 @@ def _set_up_flow(args):
     flow_utils.load_grid_summaries. This guarantees the mock observations drawn from the
     reconstructed validation set were seen neither by the compression network nor by the flow.
     """
+    from msi.flow_conductor.likelihood_flow import LikelihoodFlow
+    from msi.utils import flow as flow_utils
+
     grid_preds, grid_cosmos, _, _, i_signal = flow_utils.load_grid_summaries(args.preds_file, args.preds_file_2)
 
     model = LikelihoodFlow.from_checkpoint(model_dir=args.flow_dir, device="cpu")
@@ -231,12 +286,17 @@ def _set_up_flow(args):
 
 
 def merge(indices, args):
-    args = setup(args)
+    args = parse_args(args)
+    merge_files(indices, args)
+
+
+def merge_files(indices, args):
+    """Merge per-simulation coverage results and remove temporary files."""
     n_sims = args.n_sims
 
     out_file = os.path.join(args.flow_dir, f"mcmc_samples.h5")
     with h5py.File(out_file, "w") as f_merged:
-        for index in LOGGER.progressbar(indices, desc="merging files", at_level="info"):
+        for index in tqdm(indices, desc="merging files"):
             try:
                 in_file = os.path.join(args.flow_dir, f"mcmc_samples_{index}.h5")
                 with h5py.File(in_file, "r") as f_in:
