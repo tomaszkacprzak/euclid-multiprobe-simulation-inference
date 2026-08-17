@@ -69,8 +69,13 @@ dev = [
 Repository = "https://github.com/des-science/multiprobe-simulation-inference"
 Documentation = "https://arxiv.org/abs/2511.04681"
 
+[project.scripts]
+msi = "msi.cli:main"
+
 [tool.setuptools]
-packages = ["msi"]
+
+[tool.setuptools.packages.find]
+include = ["msi*"]
 
 [tool.setuptools.package-data]
 msi = ["*.yaml", "*.yml"]

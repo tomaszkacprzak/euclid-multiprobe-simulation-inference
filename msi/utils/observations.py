@@ -1,12 +1,20 @@
 def add_obs_args(parser, mock_labels_default=None):
     """Add observation inclusion flags to an argument parser (all default off)."""
-    parser.add_argument("--include_grid", action="store_true")
-    parser.add_argument("--n_grid_examples", type=int, default=16)
-    parser.add_argument("--include_des", action="store_true")
-    parser.add_argument("--include_buzzard", action="store_true")
-    parser.add_argument("--buzzard_labels", nargs="+", default=["Buzzard_mean"])
-    parser.add_argument("--include_mocks", action="store_true")
-    parser.add_argument("--mock_labels", nargs="+", default=mock_labels_default or ["fiducial_bench"])
+    parser.add_argument("--include-grid", "--include_grid", dest="include_grid", action="store_true")
+    parser.add_argument("--n-grid-examples", "--n_grid_examples", dest="n_grid_examples", type=int, default=16)
+    parser.add_argument("--include-des", "--include_des", dest="include_des", action="store_true")
+    parser.add_argument("--include-buzzard", "--include_buzzard", dest="include_buzzard", action="store_true")
+    parser.add_argument(
+        "--buzzard-labels", "--buzzard_labels", dest="buzzard_labels", nargs="+", default=["Buzzard_mean"]
+    )
+    parser.add_argument("--include-mocks", "--include_mocks", dest="include_mocks", action="store_true")
+    parser.add_argument(
+        "--mock-labels",
+        "--mock_labels",
+        dest="mock_labels",
+        nargs="+",
+        default=mock_labels_default or ["fiducial_bench"],
+    )
 
 
 def _cosmo_dict(params, cosmo_arr):
