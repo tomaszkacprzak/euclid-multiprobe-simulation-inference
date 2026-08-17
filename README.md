@@ -65,13 +65,13 @@ Notebooks for simulation-based inference via neural likelihood estimation and MC
 
 ## Apps
 
-Legacy apps can be launched via the script directly
+Legacy apps can be launched via the script directly:
 
 - `run_inference.py ...` - trains a normalizing flow for likelihood conditional density.
 
 - `run_mcmc_for_coverage_tests.py ...` - run chains for coverage tests.
 
-Euclid apps have a unified command line interface. After installing the package, run 
+Euclid apps have a unified command line interface. After installing the package, run:
 
 - `euclid-deeplss-inference likelihood` - runs conditional density estimator with continuous normalizing flows. 
 
