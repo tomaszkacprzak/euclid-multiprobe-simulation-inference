@@ -8,7 +8,7 @@ from typing import Optional
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level MSI argument parser."""
     parser = argparse.ArgumentParser(
-        prog="msi",
+        prog="euclid-deeplss-inference",
         description="Run simulation-based inference and coverage workflows.",
     )
     parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
