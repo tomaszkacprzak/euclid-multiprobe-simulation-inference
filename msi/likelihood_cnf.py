@@ -16,3 +16,6 @@ def main(config_file: str, input_samples: str):
     The likelihood implementation will be added here.  This entry point is
     currently a stub so callers can integrate with the command-line interface.
     """
+
+    print('config_file', config_file)
+    print('input_samples', input_samples)
