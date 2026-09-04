@@ -1,0 +1,51 @@
+# Default conditional flow-matching (CFM) likelihood configuration.
+# Use with: --likelihood-model cfm --likelihood-config configs/cfm/default.yaml
+#
+# CFM configs use a strict, sectioned schema. Normalizing-flow options such as
+# `transform` and `context_embedding` are intentionally not accepted here.
+
+model:
+  # ConditionalFlowMatchingLikelihood velocity-field and ODE settings.
+  model_type: affine             # affine or mlp
+  sigma_min: 0.05
+  hidden_features: 128
+  num_hidden_layers: 3
+  ode_steps: 64
+  divergence_estimator: exact    # exact or hutchinson (MLP field only)
+  hutchinson_samples: 1
+  ode_method: rk4
+  ode_rtol: 1.0e-5
+  ode_atol: 1.0e-7
+  ode_options: {}                # forwarded to torchdiffeq.odeint
+
+  # Learned map from cosmological parameters to the CFM context dimension.
+  context_adapter:
+    type: mlp                    # linear or mlp
+    hidden_features: 64
+    num_hidden_layers: 1
+    activation: silu             # relu, silu, tanh, or gelu
+
+training:
+  n_epochs: 50
+  batch_size: 2048
+  vali_split: 0.1
+  learning_rate: 3.0e-4
+  weight_decay: 1.0e-6
+  scheduler_type: null
+  scheduler_kwargs: null
+  n_patience_epochs: null
+  min_delta: 1.0e-4
+  clip_by_global_norm: null
+  seed: null
+
+# Summary and parameter standardization are currently always enabled by the
+# application wrapper, so this section has no configurable keys yet.
+preprocessing: {}
+
+diagnostics:
+  n_cosmos: 1000
+
+mcmc:
+  n_walkers: 1024
+  n_steps: 1000
+  n_burnin_steps: 1000

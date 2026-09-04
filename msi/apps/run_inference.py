@@ -1,8 +1,125 @@
 import os
+import warnings
 
 import yaml
 
 from msi.utils import observations
+
+_CFM_CONFIG_KEYS = {
+    "model": {
+        "model_type",
+        "sigma_min",
+        "hidden_features",
+        "num_hidden_layers",
+        "ode_steps",
+        "divergence_estimator",
+        "hutchinson_samples",
+        "ode_method",
+        "ode_rtol",
+        "ode_atol",
+        "ode_options",
+        "context_adapter",
+    },
+    "training": {
+        "epochs",
+        "n_epochs",
+        "batch_size",
+        "vali_split",
+        "learning_rate",
+        "weight_decay",
+        "scheduler_type",
+        "scheduler_kwargs",
+        "n_patience_epochs",
+        "min_delta",
+        "clip_by_global_norm",
+        "seed",
+    },
+    # CFM currently always standardizes summaries and parameters.  Keeping this
+    # explicit section (and validating that it is empty) gives preprocessing a
+    # stable home without advertising switches which the implementation ignores.
+    "preprocessing": set(),
+    "diagnostics": {"n_cosmos"},
+    "mcmc": {"n_walkers", "n_steps", "n_burnin_steps"},
+}
+
+_CFM_CONTEXT_ADAPTER_KEYS = {"type", "hidden_features", "num_hidden_layers", "activation"}
+_OTHER_LIKELIHOOD_KEYS = {"context_embedding", "transform", "observations"}
+
+
+def _validate_likelihood_config(config, likelihood_model):
+    """Validate the selected likelihood's YAML and return it unchanged.
+
+    Legacy normalizing-flow and GMM dictionaries remain permissive for backward
+    compatibility.  CFM is new and uses a deliberately strict, sectioned schema
+    so misspelled or flow-family options cannot be silently discarded.
+    """
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise ValueError("Likelihood config must be a YAML mapping at the top level.")
+    if likelihood_model != "cfm":
+        return config
+
+    unknown_sections = set(config) - set(_CFM_CONFIG_KEYS)
+    if unknown_sections:
+        family_keys = unknown_sections & _OTHER_LIKELIHOOD_KEYS
+        detail = (
+            " These options belong to the legacy flow likelihood; select "
+            "--likelihood-model flow or use the sectioned CFM schema."
+            if family_keys
+            else ""
+        )
+        raise ValueError(
+            "Invalid CFM likelihood config section(s): "
+            + ", ".join(sorted(unknown_sections))
+            + ". Expected sections: "
+            + ", ".join(_CFM_CONFIG_KEYS)
+            + "."
+            + detail
+        )
+
+    for section, allowed_keys in _CFM_CONFIG_KEYS.items():
+        values = config.get(section, {})
+        if not isinstance(values, dict):
+            raise ValueError(f"CFM config section {section!r} must be a YAML mapping.")
+        unknown_keys = set(values) - allowed_keys
+        if unknown_keys:
+            raise ValueError(
+                f"Invalid key(s) in CFM {section!r} section: "
+                f"{', '.join(sorted(unknown_keys))}. Allowed keys: "
+                f"{', '.join(sorted(allowed_keys)) or '(none)'}."
+            )
+
+    adapter = (config.get("model") or {}).get("context_adapter", {})
+    if adapter is None:
+        adapter = {}
+    if not isinstance(adapter, dict):
+        raise ValueError("CFM model.context_adapter must be a YAML mapping.")
+    unknown_adapter_keys = set(adapter) - _CFM_CONTEXT_ADAPTER_KEYS
+    if unknown_adapter_keys:
+        raise ValueError(
+            "Invalid CFM model.context_adapter key(s): "
+            + ", ".join(sorted(unknown_adapter_keys))
+            + ". Allowed keys: "
+            + ", ".join(sorted(_CFM_CONTEXT_ADAPTER_KEYS))
+            + "."
+        )
+    return config
+
+
+def _config_path(args):
+    """Resolve the model-neutral option and its deprecated flow-named alias."""
+    likelihood_config = getattr(args, "likelihood_config", None)
+    flow_config = getattr(args, "flow_config", None)
+    if likelihood_config and flow_config:
+        raise ValueError("--likelihood-config and deprecated --flow-config are mutually exclusive.")
+    if flow_config:
+        warnings.warn(
+            "--flow-config is deprecated; use --likelihood-config instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return likelihood_config or flow_config
 
 
 def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
@@ -80,11 +197,18 @@ def configure_parser(parser):
         help="After concatenating multi-step summaries, apply PCA to compress back to single-run dimensionality.",
     )
     parser.add_argument(
+        "--likelihood-config",
+        "--likelihood_config",
+        dest="likelihood_config",
+        default=None,
+        help="Path to the selected likelihood model's YAML config; uses implementation defaults if omitted.",
+    )
+    parser.add_argument(
         "--flow-config",
         "--flow_config",
         dest="flow_config",
         default=None,
-        help="Path to likelihood YAML config; uses implementation defaults if omitted.",
+        help="Deprecated alias for --likelihood-config.",
     )
     parser.add_argument(
         "--load-flow",
@@ -117,7 +241,9 @@ def main(args):
     if args.n_steps_multi is not None and args.n_steps_all:
         raise ValueError("--n_steps_multi and --n_steps_all are mutually exclusive.")
 
-    flow_conf = read_yaml(args.flow_config) if args.flow_config else {}
+    config_path = _config_path(args)
+    likelihood_conf = read_yaml(config_path) if config_path else {}
+    likelihood_conf = _validate_likelihood_config(likelihood_conf, args.likelihood_model)
     prefix = f"{args.flow_label}_" if args.flow_label else ""
 
     if is_multi:
@@ -162,7 +288,7 @@ def main(args):
                 n_steps=n_steps_label,
                 grid_preds=grid_preds,
                 grid_cosmos=grid_cosmos,
-                config=flow_conf,
+                config=likelihood_conf,
                 prefix=prefix,
                 i_signal=i_signal,
             )
@@ -200,13 +326,13 @@ def main(args):
                 n_steps=n_steps,
                 grid_preds=grid_preds,
                 grid_cosmos=grid_cosmos,
-                config=flow_conf,
+                config=likelihood_conf,
                 prefix=prefix,
                 i_signal=i_signal,
             )
 
     if not args.load_flow and hasattr(flow, "plot_diagnostics"):
-        diagnostics_conf = flow_conf.get("diagnostics", {})
+        diagnostics_conf = likelihood_conf.get("diagnostics", {})
         print("Plotting diagnostics...")
         try:
             flow.plot_diagnostics(
@@ -219,7 +345,7 @@ def main(args):
 
     obs_dict = observations.collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
 
-    mcmc_conf = flow_conf.get("mcmc", {})
+    mcmc_conf = likelihood_conf.get("mcmc", {})
     try:
         observations.run_mcmc(
             flow,
