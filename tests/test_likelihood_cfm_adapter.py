@@ -63,6 +63,37 @@ def test_adapter_is_used_for_evaluation_and_sampling(monkeypatch):
     assert torch.equal(received["sample_context"], expected)
 
 
+@pytest.mark.parametrize("conditioning_rows", [1, 3])
+@pytest.mark.parametrize("n_samples", [1, 4])
+def test_sample_likelihood_supplies_base_noise_with_expected_metadata(monkeypatch, conditioning_rows, n_samples):
+    model = LikelihoodCFM(
+        ["a", "b", "c"],
+        feature_dim=2,
+        context_adapter_config={"type": "linear"},
+    ).double()
+    model.cfm._fitted.fill_(True)
+    received = {}
+
+    def fake_sample(context, *, num_samples, base_noise, **_):
+        received["context"] = context
+        received["num_samples"] = num_samples
+        received["base_noise"] = base_noise
+        return base_noise
+
+    monkeypatch.setattr(model.cfm, "sample", fake_sample)
+    theta = torch.randn(conditioning_rows, 3, dtype=torch.float64)
+
+    result = model.sample_likelihood(theta, n_samples=n_samples, return_numpy=False)
+
+    expected_shape = (conditioning_rows, 2) if n_samples == 1 else (conditioning_rows, n_samples, 2)
+    assert received["context"].shape == (conditioning_rows, 2)
+    assert received["num_samples"] == n_samples
+    assert received["base_noise"].shape == expected_shape
+    assert received["base_noise"].dtype == theta.dtype
+    assert received["base_noise"].device == theta.device
+    assert result.shape == expected_shape
+
+
 @pytest.mark.parametrize(
     "operation,call,pattern",
     [
