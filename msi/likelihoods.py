@@ -26,9 +26,9 @@ def _flow_class():
 
 
 def _cfm_class():
-    from msi.flow_matching.cnf_cfm import ConditionalFlowMatchingLikelihood
+    from msi.flow_matching.likelihood_cfm import LikelihoodCFM
 
-    return ConditionalFlowMatchingLikelihood
+    return LikelihoodCFM
 
 
 def _gmm_class():
@@ -116,20 +116,20 @@ def _load_gmm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, 
     )
 
 
-def _build_cfm(*, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
-    """Build the standalone CFM estimator.
-
-    The current CFM architecture requires summary and parameter vectors to
-    have equal dimensions.  Keeping that constraint explicit is preferable to
-    silently constructing an invalid conditional density.
-    """
+def _build_cfm(*, params, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
+    """Build the application CFM and its learned context adapter."""
     import os
     import torch
 
-    if grid_preds.shape[-1] != grid_cosmos.shape[-1]:
-        raise ValueError("The cfm likelihood currently requires equal summary and parameter dimensions.")
     model_conf = config.get("model", {})
-    model = _cfm_class()(dimension=grid_preds.shape[-1], **model_conf)
+    adapter_conf = model_conf.get("context_adapter", {})
+    cfm_conf = {key: value for key, value in model_conf.items() if key != "context_adapter"}
+    model = _cfm_class()(
+        params,
+        feature_dim=grid_preds.shape[-1],
+        cfm_config=cfm_conf,
+        context_adapter_config=adapter_conf,
+    )
     training = config.get("training", {})
     model.fit(
         torch.as_tensor(grid_cosmos, dtype=torch.float32),
@@ -140,21 +140,44 @@ def _build_cfm(*, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="",
     model_dir = os.path.join(pred_dir, prefix + model.model_name + _suffix(n_steps))
     os.makedirs(model_dir, exist_ok=True)
     torch.save(
-        {"init_kwargs": {"dimension": grid_preds.shape[-1], **model_conf}, "state_dict": model.state_dict()},
+        {"init_kwargs": model.checkpoint_init_kwargs(), "state_dict": model.state_dict()},
         os.path.join(model_dir, model.model_name + ".pt"),
     )
     model.model_dir = model_dir
     return model
 
 
-def _load_cfm(*, pred_dir, n_steps, prefix="", **_):
+def _load_cfm(*, params, pred_dir, n_steps, grid_preds, grid_cosmos, prefix="", **_):
     import os
     import torch
 
     cls = _cfm_class()
     path = os.path.join(pred_dir, prefix + cls.model_name + _suffix(n_steps), cls.model_name + ".pt")
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model = cls(**checkpoint["init_kwargs"])
+    init_kwargs = dict(checkpoint["init_kwargs"])
+    stored_theta_dim = init_kwargs.pop("theta_dim")
+    requested_theta_dim = len(params)
+    if requested_theta_dim != stored_theta_dim:
+        raise ValueError(
+            f"Cannot load CFM checkpoint with theta_dim={stored_theta_dim} for "
+            f"an application configured with theta_dim={requested_theta_dim}."
+        )
+    requested_feature_dim = int(grid_preds.shape[-1])
+    if requested_feature_dim != init_kwargs["feature_dim"]:
+        raise ValueError(
+            f"Cannot load CFM checkpoint with feature_dim={init_kwargs['feature_dim']} "
+            f"for summaries with feature_dim={requested_feature_dim}."
+        )
+    if int(grid_cosmos.shape[-1]) != requested_theta_dim:
+        raise ValueError(
+            f"Checkpoint loading: grid_cosmos must have theta_dim={requested_theta_dim}; "
+            f"received {grid_cosmos.shape[-1]}."
+        )
+    model = cls(**init_kwargs)
+    if model.theta_dim != stored_theta_dim:
+        raise ValueError(
+            f"Checkpoint theta_dim is {stored_theta_dim}, but its parameter list has " f"length {model.theta_dim}."
+        )
     model.load_state_dict(checkpoint["state_dict"])
     model.model_dir = os.path.dirname(path)
     return model
