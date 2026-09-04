@@ -76,7 +76,12 @@ Likelihood implementations can be selected by their registry name (`flow`, `gmm`
 from msi.likelihood_registry import get_likelihood_class
 
 Likelihood = get_likelihood_class("cfm")
-model = Likelihood(dimension=8, model_type="mlp")
+model = Likelihood(
+    params=["parameter_1", "parameter_2"],
+    feature_dim=2,
+    context_dim=2,
+    model_type="mlp",
+)
 ```
 
 The CFM class can also be imported directly after installing the `cfm` extra:

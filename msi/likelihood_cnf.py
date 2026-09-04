@@ -48,7 +48,17 @@ class LikelihoodCFM(LikelihoodBase):
         device=None,
         floatx=torch.float32,
         torch_seed=7,
+        dtype=None,
+        random_seed=None,
     ):
+        if dtype is not None:
+            if floatx != torch.float32 and floatx != dtype:
+                raise ValueError("floatx and dtype specify different PyTorch dtypes.")
+            floatx = dtype
+        if random_seed is not None:
+            if torch_seed != 7 and torch_seed != random_seed:
+                raise ValueError("torch_seed and random_seed specify different seeds.")
+            torch_seed = random_seed
         context_dim = len(params) if context_dim is None else int(context_dim)
         feature_dim = context_dim if feature_dim is None else int(feature_dim)
         if feature_dim != context_dim:
@@ -95,7 +105,9 @@ class LikelihoodCFM(LikelihoodBase):
         self.context_dim = context_dim
         self.device = str(device)
         self.floatx = floatx
+        self.dtype = floatx
         self.torch_seed = torch_seed
+        self.random_seed = torch_seed
         self._setup_dirs(".pt")
 
         torch.manual_seed(torch_seed)
@@ -169,11 +181,23 @@ class LikelihoodCFM(LikelihoodBase):
 
     def sample_likelihood(self, theta, n_samples=1000, batch_size=None, return_numpy=True):
         """Return samples shaped (conditions, samples, features)."""
-        del batch_size  # The composed ODE model evaluates all conditions together.
         conditions = torch.atleast_2d(self._tensor(theta))
-        samples = self.model.sample(conditions, num_samples=n_samples)
-        if n_samples == 1:
-            samples = samples[:, None, :]
+        if conditions.ndim != 2 or conditions.shape[-1] != self.context_dim:
+            raise ValueError(f"theta must have shape (conditions, {self.context_dim}).")
+        if n_samples < 1:
+            raise ValueError("n_samples must be positive.")
+        if batch_size is None:
+            batch_size = len(conditions)
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive when provided.")
+
+        sample_batches = []
+        for start in range(0, len(conditions), batch_size):
+            samples = self.model.sample(conditions[start : start + batch_size], num_samples=n_samples)
+            if n_samples == 1:
+                samples = samples[:, None, :]
+            sample_batches.append(samples)
+        samples = torch.cat(sample_batches, dim=0)
         return samples.detach().cpu().numpy() if return_numpy else samples
 
     def log_likelihood(self, x, theta, return_numpy=False, **kwargs):

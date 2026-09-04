@@ -118,7 +118,10 @@ def _load_gmm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, 
 
 def _build_cfm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
     """Build the application-level CFM likelihood wrapper."""
-    model_conf = config.get("model", {})
+    model_conf = dict(config.get("model", {}))
+    configured_dimension = model_conf.pop("dimension", grid_preds.shape[-1])
+    if configured_dimension != grid_preds.shape[-1]:
+        raise ValueError("The configured CFM dimension does not match the summary dimension.")
     model = _cfm_class()(
         params,
         msfm_conf,

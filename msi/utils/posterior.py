@@ -28,9 +28,6 @@ def sample_likelihood_posterior(
     application-specific emcee setup, optional wCDM-to-lambdaCDM projection,
     output handling, and temporary device movement shared by all backends.
     """
-    if method != "ensemble":
-        raise ValueError("Only the 'ensemble' posterior sampling method is supported.")
-
     original_device = likelihood.device
     target_device = original_device if device is None else device
     x_obs = torch.as_tensor(x_obs, dtype=likelihood.floatx, device=target_device)
