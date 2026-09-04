@@ -101,7 +101,13 @@ class LikelihoodCFM(nn.Module):
         feature_dim: int,
         cfm_config: Optional[Mapping[str, Any]] = None,
         context_adapter_config: Optional[Mapping[str, Any]] = None,
+        conf: Any = None,
+        out_dir: Optional[str] = None,
         model_dir: Optional[str] = None,
+        prefix: str = "",
+        suffix: str = "",
+        label: Optional[str] = None,
+        load_existing: bool = False,
     ) -> None:
         super().__init__()
         self.params = list(params)
@@ -114,7 +120,20 @@ class LikelihoodCFM(nn.Module):
 
         self.cfm_config = deepcopy(dict(cfm_config or {}))
         self.context_adapter_config = deepcopy(dict(context_adapter_config or {}))
+        self.conf = conf
+        self.out_dir = out_dir
+        self.prefix = prefix
+        self.suffix = suffix
+        self.label = label
+        if model_dir is None and out_dir is not None:
+            directory_name = prefix + self.model_name + suffix
+            model_dir = (
+                os.path.join(out_dir, label, directory_name) if label else os.path.join(out_dir, directory_name)
+            )
         self.model_dir = model_dir
+        if self.model_dir is not None:
+            os.makedirs(self.model_dir, exist_ok=True)
+        self.model_file = os.path.join(model_dir, self.model_name + ".pt") if model_dir else None
         self.context_adapter = ContextAdapter(self.theta_dim, self.feature_dim, self.context_adapter_config)
         self.cfm = ConditionalFlowMatchingLikelihood(dimension=self.feature_dim, **self.cfm_config)
         self.feature_standardizer = _Standardizer(self.feature_dim)
@@ -122,6 +141,8 @@ class LikelihoodCFM(nn.Module):
         self.train_losses: list[float] = []
         self.vali_losses: list[float] = []
         self.freeze()
+        if load_existing:
+            self.load()
 
     def checkpoint_init_kwargs(self) -> dict[str, Any]:
         """Return complete, serializable architecture metadata."""
@@ -131,7 +152,12 @@ class LikelihoodCFM(nn.Module):
             "feature_dim": self.feature_dim,
             "cfm_config": deepcopy(self.cfm_config),
             "context_adapter_config": deepcopy(self.context_adapter_config),
+            "conf": self.conf,
+            "out_dir": self.out_dir,
             "model_dir": self.model_dir,
+            "prefix": self.prefix,
+            "suffix": self.suffix,
+            "label": self.label,
         }
 
     def _plot_epochs(self) -> None:
@@ -143,6 +169,18 @@ class LikelihoodCFM(nn.Module):
         from msi.likelihood_base import LikelihoodBase
 
         LikelihoodBase._plot_epochs(self, self.train_losses, self.vali_losses)
+
+    def plot_contours(self, *args: Any, **kwargs: Any):
+        """Plot posterior contours using the common application implementation."""
+        from msi.likelihood_base import LikelihoodBase
+
+        return LikelihoodBase.plot_contours(self, *args, **kwargs)
+
+    def plot_diagnostics(self, *args: Any, **kwargs: Any):
+        """Run and plot the common likelihood diagnostics."""
+        from msi.likelihood_base import LikelihoodBase
+
+        return LikelihoodBase.plot_diagnostics(self, *args, **kwargs)
 
     def freeze(self) -> None:
         self.cfm.freeze()
@@ -355,15 +393,11 @@ class LikelihoodCFM(nn.Module):
         return result.detach().cpu().numpy() if return_numpy else result
 
     def _mcmc_log_posterior(self, theta_walkers: Any, x_obs: Any, device: Any = None):
-        """Evaluate all observations for an MCMC walker batch in raw units.
+        """Evaluate the prior-aware posterior for an MCMC walker batch."""
+        from msfm.utils import prior
 
-        Prior enforcement belongs to the calling sampler; this method supplies
-        the (summed) likelihood term and deliberately routes through
-        :meth:`log_likelihood`, so both standardizers and the feature Jacobian
-        are applied identically to ordinary evaluation.
-        """
         del device  # Input conversion follows the module's actual device.
-        observations = self._tensor(x_obs)
+        observations = torch.atleast_2d(self._tensor(x_obs))
         self._validate_matrix("x_obs", observations, self.feature_dim, "MCMC")
         theta_tensor = self._tensor(theta_walkers)
         self._validate_matrix("theta", theta_tensor, self.theta_dim, "MCMC")
@@ -371,7 +405,8 @@ class LikelihoodCFM(nn.Module):
         with torch.no_grad():
             for observation in observations:
                 total += self.log_likelihood(observation[None, :], theta_tensor)
-        return total.detach().cpu().numpy()
+        likelihood = total.detach().cpu().numpy()
+        return prior.log_posterior(theta_walkers, likelihood, conf=self.conf, params=self.params)
 
     def sample_posterior(
         self,
@@ -385,17 +420,15 @@ class LikelihoodCFM(nn.Module):
         **_: Any,
     ) -> np.ndarray:
         """Sample the posterior through the application-wide MCMC interface."""
-        from msfm.utils import prior
-
         from msi.utils import mcmc
 
         def log_posterior(theta_walkers: Any) -> np.ndarray:
-            likelihood = self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
-            return prior.log_posterior(theta_walkers, likelihood, conf=None, params=self.params)
+            return self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
 
         return mcmc.run_emcee(
             log_posterior,
             self.params,
+            conf=self.conf,
             out_dir=None if dont_save else self.model_dir,
             label=label,
             n_walkers=n_walkers,
@@ -405,7 +438,7 @@ class LikelihoodCFM(nn.Module):
 
     def save(self, path: Optional[str] = None) -> str:
         """Save architecture, adapters, scalers, and model weights (never optimizer state)."""
-        path = path or (os.path.join(self.model_dir, self.model_name + ".pt") if self.model_dir else None)
+        path = path or self.model_file
         if path is None:
             raise ValueError("A checkpoint path or model_dir is required.")
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -424,6 +457,27 @@ class LikelihoodCFM(nn.Module):
             path,
         )
         return path
+
+    def load(self, path: Optional[str] = None, *, map_location: Any = "cpu") -> "LikelihoodCFM":
+        """Load a compatible checkpoint into this instance."""
+        path = path or self.model_file
+        if path is None:
+            raise ValueError("A checkpoint path or model_dir is required.")
+        restored = type(self).from_checkpoint(path, map_location=map_location)
+        compatible_fields = ("params", "theta_dim", "feature_dim", "cfm_config", "context_adapter_config")
+        restored_kwargs = restored.checkpoint_init_kwargs()
+        current_kwargs = self.checkpoint_init_kwargs()
+        if any(restored_kwargs[field] != current_kwargs[field] for field in compatible_fields):
+            raise ValueError("Checkpoint architecture or parameter metadata does not match this model.")
+        self.load_state_dict(restored.state_dict())
+        self.train_losses = restored.train_losses
+        self.vali_losses = restored.vali_losses
+        if hasattr(restored, "vali_indices"):
+            self.vali_indices = restored.vali_indices
+            self.split_metadata = restored.split_metadata
+        self.eval()
+        self.freeze()
+        return self
 
     @classmethod
     def from_checkpoint(cls, path: str, *, map_location: Any = "cpu") -> "LikelihoodCFM":

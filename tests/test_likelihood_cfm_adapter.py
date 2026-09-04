@@ -3,6 +3,7 @@
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -134,7 +135,8 @@ def test_checkpoint_metadata_records_dimensions_and_adapter_configuration():
 
 
 def test_checkpoint_round_trip_preserves_validation_indices(tmp_path):
-    model = LikelihoodCFM(["a", "b"], feature_dim=2)
+    conf = {"analysis": {"prior": "test-prior"}}
+    model = LikelihoodCFM(["a", "b"], feature_dim=2, conf=conf, label="example")
     model.vali_indices = torch.tensor([1, 4, 7])
     model.split_metadata = {"method": "grouped", "vali_split": 0.1}
 
@@ -142,3 +144,42 @@ def test_checkpoint_round_trip_preserves_validation_indices(tmp_path):
 
     assert restored.get_validation_indices().tolist() == [1, 4, 7]
     assert restored.split_metadata == model.split_metadata
+    assert restored.params == ["a", "b"]
+    assert restored.conf == conf
+    assert restored.label == "example"
+
+
+def test_mcmc_log_posterior_applies_configured_prior(monkeypatch):
+    model = LikelihoodCFM(["a", "b"], feature_dim=2, conf={"prior": "configured"})
+    captured = {}
+
+    def fake_log_likelihood(x, theta):
+        return torch.full((theta.shape[0],), 2.0)
+
+    def fake_log_posterior(theta, likelihood, *, conf, params):
+        captured.update(theta=theta, likelihood=likelihood, conf=conf, params=params)
+        return likelihood - 1.0
+
+    monkeypatch.setattr(model, "log_likelihood", fake_log_likelihood)
+    monkeypatch.setitem(sys.modules, "msfm", SimpleNamespace(utils=SimpleNamespace()))
+    monkeypatch.setitem(
+        sys.modules, "msfm.utils", SimpleNamespace(prior=SimpleNamespace(log_posterior=fake_log_posterior))
+    )
+
+    walkers = np.zeros((3, 2))
+    result = model._mcmc_log_posterior(walkers, np.zeros((2, 2)))
+
+    assert np.array_equal(result, np.full(3, 3.0))
+    assert captured["theta"] is walkers
+    assert np.array_equal(captured["likelihood"], np.full(3, 4.0))
+    assert captured["conf"] is model.conf
+    assert captured["params"] == model.params
+
+
+def test_output_directory_uses_likelihood_base_naming_contract(tmp_path):
+    model = LikelihoodCFM(["a", "b"], feature_dim=2, out_dir=str(tmp_path), prefix="pre_", suffix="_post", label="run")
+
+    assert model.model_dir == str(tmp_path / "run" / "pre_likelihood_cfm_post")
+    assert model.model_file == str(tmp_path / "run" / "pre_likelihood_cfm_post" / "likelihood_cfm.pt")
+    assert callable(model.plot_contours)
+    assert callable(model.plot_diagnostics)

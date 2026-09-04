@@ -76,7 +76,11 @@ Likelihood implementations can be selected by their registry name (`flow`, `gmm`
 from msi.likelihood_registry import get_likelihood_class
 
 Likelihood = get_likelihood_class("cfm")
-model = Likelihood(dimension=8, model_type="mlp")
+model = Likelihood(
+    params=["Omega_m", "sigma_8"],
+    feature_dim=8,
+    cfm_config={"model_type": "mlp"},
+)
 ```
 
 The CFM class can also be imported directly after installing the `cfm` extra:
@@ -84,6 +88,12 @@ The CFM class can also be imported directly after installing the `cfm` extra:
 ```python
 from msi.flow_matching import ConditionalFlowMatchingLikelihood
 ```
+
+`ConditionalFlowMatchingLikelihood` is the tensor-only numerical backend.
+The registered `LikelihoodCFM` adapter adds NumPy inputs/outputs, application
+configuration and parameter metadata, grouped validation splits, posterior
+sampling with the analysis prior, plotting helpers, and self-describing
+checkpoints.
 
 ### `notebooks`
 Notebooks for simulation-based inference via neural likelihood estimation and MCMC sampling. 

@@ -116,7 +116,7 @@ def _load_gmm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, 
     )
 
 
-def _build_cfm(*, params, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
+def _build_cfm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
     """Build the application CFM and its learned context adapter."""
     import os
     import torch
@@ -130,6 +130,7 @@ def _build_cfm(*, params, pred_dir, n_steps, grid_preds, grid_cosmos, config, pr
         feature_dim=grid_preds.shape[-1],
         cfm_config=cfm_conf,
         context_adapter_config=adapter_conf,
+        conf=msfm_conf,
         model_dir=model_dir,
     )
     training = config.get("training", {})
