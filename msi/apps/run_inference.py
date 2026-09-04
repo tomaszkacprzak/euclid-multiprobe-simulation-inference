@@ -144,11 +144,13 @@ def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
 
 def configure_parser(parser):
     """Add inference arguments to an ``argparse`` parser."""
+    from msi.likelihoods import LIKELIHOODS
+
     parser.add_argument("--out-dir", "--out_dir", dest="out_dir", required=True)
     parser.add_argument("--model-name", "--model_name", dest="model_name", default="model")
     parser.add_argument(
         "--likelihood-model",
-        choices=("flow", "cfm", "gmm"),
+        choices=tuple(LIKELIHOODS),
         default="flow",
         help="Conditional likelihood implementation (default: flow).",
     )

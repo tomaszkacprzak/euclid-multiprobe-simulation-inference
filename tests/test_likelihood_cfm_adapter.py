@@ -100,3 +100,14 @@ def test_checkpoint_metadata_records_dimensions_and_adapter_configuration():
     assert metadata["theta_dim"] == 5
     assert metadata["feature_dim"] == 2
     assert metadata["context_adapter_config"] == adapter_config
+
+
+def test_checkpoint_round_trip_preserves_validation_indices(tmp_path):
+    model = LikelihoodCFM(["a", "b"], feature_dim=2)
+    model.vali_indices = torch.tensor([1, 4, 7])
+    model.split_metadata = {"method": "grouped", "vali_split": 0.1}
+
+    restored = LikelihoodCFM.from_checkpoint(model.save(str(tmp_path / "likelihood_cfm.pt")))
+
+    assert restored.get_validation_indices().tolist() == [1, 4, 7]
+    assert restored.split_metadata == model.split_metadata

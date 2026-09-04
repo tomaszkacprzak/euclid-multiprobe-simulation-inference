@@ -12,12 +12,13 @@ import numpy as np
 
 import torch
 from torch import optim
-from torch.utils.data import TensorDataset, DataLoader, Subset, random_split
+from torch.utils.data import TensorDataset, DataLoader, Subset
 
 from enflows.flows import Flow
 
 from msi.likelihood_base import LikelihoodBase
 from msi.utils import mcmc
+from msi.utils.dataset_split import validation_split_indices
 from msi.flow_conductor import architecture
 from msfm.utils import logger, files, prior
 
@@ -408,22 +409,21 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         dset = TensorDataset(x, theta)
 
+        train_idx, vali_idx, self.split_metadata = validation_split_indices(
+            len(dset), vali_split, seed=seed, group_ids=group_ids
+        )
+        self.train_indices = np.asarray(train_idx)
+        self.validation_indices = np.asarray(vali_idx)
+
         if group_ids is not None:
-            unique_ids = np.unique(group_ids)
-            split = int((1 - vali_split) * len(unique_ids))
-            train_ids, vali_ids = unique_ids[:split], unique_ids[split:]
-            train_idx = np.where(np.isin(group_ids, train_ids))[0]
-            vali_idx = np.where(np.isin(group_ids, vali_ids))[0]
             LOGGER.info(
-                f"Splitting by group id into {len(train_ids)} train / {len(vali_ids)} vali groups "
-                f"({len(train_idx)} / {len(vali_idx)} rows)"
+                f"Splitting by group id into train / validation groups " f"({len(train_idx)} / {len(vali_idx)} rows)"
             )
             self.train_dset = Subset(dset, train_idx)
             self.vali_dset = Subset(dset, vali_idx)
         else:
-            self.train_dset, self.vali_dset = random_split(
-                dset, [1 - vali_split, vali_split], torch.Generator().manual_seed(seed)
-            )
+            self.train_dset = Subset(dset, train_idx)
+            self.vali_dset = Subset(dset, vali_idx)
 
         self.train_loader = DataLoader(self.train_dset, batch_size, shuffle=True, drop_last=True)
         self.vali_loader = DataLoader(self.vali_dset, batch_size, shuffle=False, drop_last=True)
@@ -661,6 +661,9 @@ class LikelihoodFlow(Flow, LikelihoodBase):
 
         if self.model_dir is not None:
             checkpoint = {"state_dict": self.state_dict(), "init_kwargs": self._init_kwargs}
+            if hasattr(self, "validation_indices"):
+                checkpoint["split_metadata"] = self.split_metadata
+                checkpoint["validation_indices"] = self.validation_indices
             torch.save(checkpoint, self.model_file)
             LOGGER.info(f"Saved the model to {self.model_file}")
         else:
@@ -678,9 +681,18 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             loaded = torch.load(self.model_file, map_location=map_location, weights_only=False)
             if isinstance(loaded, dict) and "state_dict" in loaded:
                 self.load_state_dict(loaded["state_dict"])
+                if "validation_indices" in loaded:
+                    self.validation_indices = np.asarray(loaded["validation_indices"])
+                    self.split_metadata = loaded.get("split_metadata", {})
             else:
                 self.load_state_dict(loaded)
             LOGGER.info(f"Loaded the model from {self.model_file}")
+
+    def get_validation_indices(self):
+        """Return a copy of the held-out row indices stored in the checkpoint."""
+        if not hasattr(self, "validation_indices"):
+            raise ValueError("This checkpoint does not contain validation indices; retrain it to record the split.")
+        return self.validation_indices.copy()
 
     @classmethod
     def from_checkpoint(

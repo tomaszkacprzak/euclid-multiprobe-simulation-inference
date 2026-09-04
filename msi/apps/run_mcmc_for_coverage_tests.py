@@ -86,6 +86,14 @@ def resources(args):
 
 def configure_parser(parser, include_execution_options=True):
     """Add coverage-test arguments to an ``argparse`` parser."""
+    from msi.likelihoods import LIKELIHOODS
+
+    parser.add_argument(
+        "--likelihood-model",
+        choices=tuple(LIKELIHOODS),
+        default="flow",
+        help="Conditional likelihood implementation used by the checkpoint (default: flow).",
+    )
     parser.add_argument(
         "--preds-file",
         "--preds_file",
@@ -251,36 +259,18 @@ def main(args):
 
 
 def _set_up_flow(args):
-    """Restore the trained flow and reproduce its held-out validation split for coverage testing.
-
-    LikelihoodFlow._prepare_data's train/validation split is made deterministic and grouped by
-    signal realization (group_ids=i_signal): the unique signal ids are sorted and partitioned into
-    a train and a validation fraction, so no signal realization -- regardless of its noise
-    realizations -- appears in both sets. The split therefore depends only on the content and row
-    order of (x, theta, i_signal), not on any random seed, so grid_preds/grid_cosmos/i_signal must
-    be (re)built exactly as run_inference.py built them at training time -- hence reusing
-    flow_utils.load_grid_summaries. This guarantees the mock observations drawn from the
-    reconstructed validation set were seen neither by the compression network nor by the flow.
-    """
-    from msi.flow_conductor.likelihood_flow import LikelihoodFlow
+    """Restore a registered likelihood and its checkpointed held-out rows."""
+    from msi.likelihoods import load_likelihood_checkpoint
     from msi.utils import flow as flow_utils
 
-    grid_preds, grid_cosmos, _, _, i_signal = flow_utils.load_grid_summaries(args.preds_file, args.preds_file_2)
-
-    model = LikelihoodFlow.from_checkpoint(model_dir=args.flow_dir, device="cpu")
-
-    # get the correct signal-grouped split of the validation data
-    model._prepare_data(
-        x=grid_preds,
-        theta=grid_cosmos,
-        batch_size=10000,
-        vali_split=0.1,
-        group_ids=i_signal,
-    )
-
-    x_vali = model.vali_dset.dataset.tensors[0][model.vali_dset.indices]
-    theta_vali = model.vali_dset.dataset.tensors[1][model.vali_dset.indices]
-    LOGGER.info(f"Reconstructed {len(x_vali)} held-out validation examples for coverage testing")
+    grid_preds, grid_cosmos, _, _, _ = flow_utils.load_grid_summaries(args.preds_file, args.preds_file_2)
+    model = load_likelihood_checkpoint(args.likelihood_model, args.flow_dir, map_location="cpu")
+    validation_indices = model.get_validation_indices()
+    if validation_indices.size and validation_indices.max() >= len(grid_preds):
+        raise ValueError("Checkpoint validation indices are incompatible with the supplied predictions file.")
+    x_vali = torch.as_tensor(grid_preds[validation_indices], dtype=torch.float32)
+    theta_vali = torch.as_tensor(grid_cosmos[validation_indices], dtype=torch.float32)
+    LOGGER.info(f"Loaded {len(x_vali)} checkpointed held-out validation examples for coverage testing")
 
     return model, x_vali, theta_vali
 

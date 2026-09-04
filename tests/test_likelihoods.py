@@ -3,6 +3,7 @@ import argparse
 import pytest
 
 from msi.apps.run_inference import _config_path, _validate_likelihood_config, configure_parser
+from msi.apps.run_mcmc_for_coverage_tests import configure_parser as configure_coverage_parser
 from msi.likelihoods import LIKELIHOODS, get_likelihood
 
 
@@ -27,6 +28,15 @@ def test_inference_parser_defaults_to_flow_and_accepts_registry_names():
     for name in LIKELIHOODS:
         args = parser.parse_args(["--out-dir", "output", "--likelihood-model", name])
         assert args.likelihood_model == name
+
+
+def test_coverage_parser_uses_the_inference_likelihood_registry():
+    parser = configure_coverage_parser(argparse.ArgumentParser())
+    required = ["--preds-file", "preds.h5", "--flow-dir", "checkpoint"]
+
+    assert parser.parse_args(required).likelihood_model == "flow"
+    for name in LIKELIHOODS:
+        assert parser.parse_args(required + ["--likelihood-model", name]).likelihood_model == name
 
 
 def test_inference_parser_has_model_neutral_config_and_deprecated_alias():
