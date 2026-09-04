@@ -35,7 +35,16 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
     model_name = "likelihood_gmm"
 
     def __init__(
-        self, params, conf=None, layers=None, out_dir=None, label=None, load_existing=True, floatx=tf.float32
+        self,
+        params,
+        conf=None,
+        layers=None,
+        out_dir=None,
+        label=None,
+        load_existing=True,
+        floatx=tf.float32,
+        prefix="",
+        suffix="",
     ):
         """
         Initialize the LikelihoodGMM object.
@@ -59,6 +68,8 @@ class LikelihoodGMM(tf.keras.Sequential, LikelihoodBase):
 
         self.out_dir = out_dir
         self.label = label
+        self.prefix = prefix
+        self.suffix = suffix
         self._setup_dirs(".tf")
 
         if layers is None:

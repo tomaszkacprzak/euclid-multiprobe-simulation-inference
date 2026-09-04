@@ -296,6 +296,7 @@ class ConditionalMLPVelocity(nn.Module):
 
 
 class ConditionalFlowMatchingLikelihood(nn.Module):
+    model_name = "likelihood_cfm"
     """Conditional continuous-normalizing-flow likelihood p(y | x).
 
     Parameters

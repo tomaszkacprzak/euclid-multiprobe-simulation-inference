@@ -7,7 +7,6 @@ import numpy as np
 
 from msfm.utils.input_output import read_yaml
 from msi.flow_conductor import architecture
-from msi.flow_conductor.likelihood_flow import LikelihoodFlow
 from msi.utils import input_output
 
 
@@ -187,9 +186,7 @@ def load_grid_summaries_multi(pred_files, pca_compress=False):
     i_signal = ref_signal
 
     common_keys = set.intersection(*[set(opd.keys()) for opd in all_obs_pred_dicts])
-    obs_pred_dict = {
-        key: np.concatenate([opd[key] for opd in all_obs_pred_dicts], axis=-1) for key in common_keys
-    }
+    obs_pred_dict = {key: np.concatenate([opd[key] for opd in all_obs_pred_dicts], axis=-1) for key in common_keys}
     obs_cosmo_dict = all_obs_cosmo_dicts[0]
 
     if pca_compress:
@@ -258,9 +255,18 @@ def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
 
 
 def build_flow(
-    params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, flow_conf: dict, prefix: str = "", i_signal=None
+    params,
+    msfm_conf,
+    pred_dir,
+    n_steps,
+    grid_preds,
+    grid_cosmos,
+    flow_conf: dict,
+    prefix: str = "",
+    i_signal=None,
+    likelihood_model="flow",
 ):
-    """Build, train, plot diagnostics, and return a LikelihoodFlow.
+    """Backward-compatible entry point for building a registered likelihood.
 
     Args:
         params: List of cosmological parameter names.
@@ -283,46 +289,17 @@ def build_flow(
     Returns:
         LikelihoodFlow: Trained flow with saved checkpoint.
     """
-    x_dim = grid_preds.shape[-1]
-    theta_dim = grid_cosmos.shape[-1]
+    from msi.likelihoods import build_likelihood
 
-    embedding_net, transform = build_flow_architecture(x_dim, theta_dim, flow_conf)
-
-    suffix = f"_{n_steps}" if n_steps is not None else ""
-    flow = LikelihoodFlow(
-        params,
-        msfm_conf,
-        feature_dim=x_dim,
-        embedding_net=embedding_net,
-        transform=transform,
-        out_dir=pred_dir,
+    return build_likelihood(
+        likelihood_model,
+        params=params,
+        msfm_conf=msfm_conf,
+        pred_dir=pred_dir,
+        n_steps=n_steps,
+        grid_preds=grid_preds,
+        grid_cosmos=grid_cosmos,
+        config=flow_conf,
         prefix=prefix,
-        suffix=suffix,
-        load_existing=False,
+        i_signal=i_signal,
     )
-
-    train_conf = flow_conf.get("training", {})
-    print("Fitting flow...")
-    flow.fit(
-        x=grid_preds,
-        theta=grid_cosmos,
-        n_epochs=train_conf.get("n_epochs", 100),
-        batch_size=train_conf.get("batch_size", 10_000),
-        scheduler_type=train_conf.get("scheduler_type", "cosine"),
-        save_model=True,
-        run_c2st=True,
-        group_ids=i_signal,
-    )
-
-    diag_conf = flow_conf.get("diagnostics", {})
-    print("Plotting diagnostics...")
-    try:
-        flow.plot_diagnostics(
-            grid_preds_true=grid_preds,
-            grid_cosmos=grid_cosmos,
-            n_cosmos=diag_conf.get("n_cosmos", 1000),
-        )
-    except Exception as e:
-        print(f"WARNING: plot_diagnostics failed ({type(e).__name__}: {e}), skipping.")
-
-    return flow
