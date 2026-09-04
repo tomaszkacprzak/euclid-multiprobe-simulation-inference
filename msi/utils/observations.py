@@ -90,7 +90,7 @@ def run_mcmc(flow, obs_dict, n_walkers=1024, n_steps=1000, n_burnin_steps=1000):
                 obs_point=obs["cosmo"],
                 obs_label=key,
                 label=key,
-                with_des_chain=False,
+                with_external_chain=False,
                 density=True,
             )
         if "des" in key.lower():

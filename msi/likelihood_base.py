@@ -64,7 +64,7 @@ class LikelihoodBase(ABC):
         # cosmo
         obs_point=None,
         obs_label="synthetic observation",
-        with_des_chain=False,
+        with_external_chain=False,
         lambdaCDM=False,
         # output
         label=None,
@@ -79,7 +79,7 @@ class LikelihoodBase(ABC):
                 Defaults to True.
             plot_fiducial (bool, optional): Whether to include the fiducial point in the plot. Defaults to True.
             fiducial_point (array-like, optional): Fiducial point to plot. Defaults to None.
-            with_des_chain (bool, optional): Whether to include the DES chain in the plot. Defaults to False.
+            with_external_chain (bool, optional): Whether to include the DES chain in the plot. Defaults to False.
             label (str, optional): Additional label for the saved chain, for example to designate different
                 observations. Defaults to None.
         """
@@ -105,7 +105,7 @@ class LikelihoodBase(ABC):
             # cosmology
             obs_cosmo=obs_point,
             obs_label=obs_label,
-            with_des_chain=with_des_chain,
+            with_external_chain=with_external_chain,
         )
 
     def plot_diagnostics(

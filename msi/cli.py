@@ -45,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     likelihood_parser = subparsers.add_parser(
         "likelihood",
         help="Evaluate a likelihood for input samples.",
-        description="Evaluate a likelihood using a YAML configuration and HDF4 samples.",
+        description="Evaluate a likelihood using a YAML configuration and HDF5 samples.",
     )
     likelihood_parser.add_argument(
         "--config-file",
@@ -59,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input_samples",
         dest="input_samples",
         required=True,
-        help="Path to the input samples in HDF4 format.",
+        help="Path to the input samples in HDF5 format.",
     )
     likelihood_parser.set_defaults(handler=_run_likelihood)
 
