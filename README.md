@@ -73,7 +73,11 @@ Legacy apps can be launched via the script directly:
 
 Euclid apps have a unified command line interface. After installing the package, run:
 
-- `euclid-deeplss-inference likelihood` - runs conditional density estimator with continuous normalizing flows. 
+- `euclid-deeplss-inference inference ...` - trains or loads a likelihood model and runs the inference workflow. Prediction inputs used by this workflow are HDF5 files (`.h5`).
+
+- `euclid-deeplss-inference coverage ...` - samples held-out simulations for posterior coverage tests.
+
+Likelihood evaluation is currently part of these workflows; there is no supported standalone `likelihood` command or standalone input-file schema.
 
 
 
