@@ -18,6 +18,7 @@ from enflows.flows import Flow
 
 from msi.likelihood_base import LikelihoodBase
 from msi.utils import mcmc
+from msi.utils.posterior import sample_likelihood_posterior
 from msi.flow_conductor import architecture
 from msfm.utils import logger, files, prior
 
@@ -574,50 +575,18 @@ class LikelihoodFlow(Flow, LikelihoodBase):
             array-like: The generated samples from the likelihood flow model.
         """
 
-        n_samples = n_steps * n_walkers
-
-        if device is None:
-            device = self.device
-
-        x_obs = torch.tensor(x_obs, dtype=self.floatx, device=device)
-        x_obs = torch.atleast_2d(x_obs)
-        if x_obs.shape[0] == 1:
-            LOGGER.info(f"Sampling the posterior from a single observation")
-        else:
-            LOGGER.info(f"Sampling the posterior from multiple observations")
-
-        self.to(device)
-        self.eval()
-
-        if lambdaCDM:
-            LOGGER.warning("lambdaCDM")
-            label += "_lambdaCDM"
-            i_w = self.params.index("w0")
-            params = [p for p in self.params if p != "w0"]
-        else:
-            LOGGER.warning("wCDM")
-            params = self.params
-
-        def log_prob_fn(theta_walkers):
-            if lambdaCDM:
-                theta_walkers = np.insert(theta_walkers, i_w, -1.0, axis=1)
-            return self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
-
-        chain = mcmc.run_emcee(
-            log_prob_fn,
-            params,
-            conf=self.conf,
-            out_dir=self.model_dir if not dont_save else None,
-            label=label,
+        return sample_likelihood_posterior(
+            self,
+            x_obs,
             n_walkers=n_walkers,
             n_steps=n_steps,
             n_burnin_steps=n_burnin_steps,
+            lambdaCDM=lambdaCDM,
+            label=label,
+            device=device,
+            dont_save=dont_save,
+            method=method,
         )
-
-        # restore the flow to the original device
-        self.to(self.device)
-
-        return chain
 
     def _single_log_posterior(self, theta_walkers, x_obs, device="cuda"):
         """theta_walkers.shape = (n_walkers, theta_dim)"""

@@ -7,11 +7,10 @@ optional backend from becoming a requirement merely by importing this module.
 from importlib import import_module
 from typing import Dict, Tuple, Type
 
-
 _LIKELIHOODS: Dict[str, Tuple[str, str]] = {
     "flow": ("msi.flow_conductor.likelihood_flow", "LikelihoodFlow"),
     "gmm": ("msi.gaussian_mixture.likelihood_gmm", "LikelihoodGMM"),
-    "cfm": ("msi.flow_matching.cnf_cfm", "ConditionalFlowMatchingLikelihood"),
+    "cfm": ("msi.likelihood_cnf", "LikelihoodCFM"),
 }
 
 
@@ -34,9 +33,7 @@ def get_likelihood_class(name: str) -> Type:
         module_name, class_name = _LIKELIHOODS[normalized_name]
     except KeyError as exc:
         choices = ", ".join(available_likelihoods())
-        raise ValueError(
-            f"Unknown likelihood {name!r}. Available likelihoods: {choices}."
-        ) from exc
+        raise ValueError(f"Unknown likelihood {name!r}. Available likelihoods: {choices}.") from exc
 
     module = import_module(module_name)
     return getattr(module, class_name)

@@ -26,9 +26,9 @@ def _flow_class():
 
 
 def _cfm_class():
-    from msi.flow_matching.cnf_cfm import ConditionalFlowMatchingLikelihood
+    from msi.likelihood_cnf import LikelihoodCFM
 
-    return ConditionalFlowMatchingLikelihood
+    return LikelihoodCFM
 
 
 def _gmm_class():
@@ -116,48 +116,33 @@ def _load_gmm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, 
     )
 
 
-def _build_cfm(*, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
-    """Build the standalone CFM estimator.
-
-    The current CFM architecture requires summary and parameter vectors to
-    have equal dimensions.  Keeping that constraint explicit is preferable to
-    silently constructing an invalid conditional density.
-    """
-    import os
-    import torch
-
-    if grid_preds.shape[-1] != grid_cosmos.shape[-1]:
-        raise ValueError("The cfm likelihood currently requires equal summary and parameter dimensions.")
+def _build_cfm(*, params, msfm_conf, pred_dir, n_steps, grid_preds, grid_cosmos, config, prefix="", **_):
+    """Build the application-level CFM likelihood wrapper."""
     model_conf = config.get("model", {})
-    model = _cfm_class()(dimension=grid_preds.shape[-1], **model_conf)
+    model = _cfm_class()(
+        params,
+        msfm_conf,
+        feature_dim=grid_preds.shape[-1],
+        context_dim=grid_cosmos.shape[-1],
+        out_dir=pred_dir,
+        prefix=prefix,
+        suffix=_suffix(n_steps),
+        load_existing=False,
+        **model_conf,
+    )
     training = config.get("training", {})
     model.fit(
-        torch.as_tensor(grid_cosmos, dtype=torch.float32),
-        torch.as_tensor(grid_preds, dtype=torch.float32),
-        epochs=training.get("n_epochs", training.get("epochs", 50)),
+        x=grid_preds,
+        theta=grid_cosmos,
+        n_epochs=training.get("n_epochs", training.get("epochs", 50)),
         batch_size=training.get("batch_size", 2048),
+        save_model=True,
     )
-    model_dir = os.path.join(pred_dir, prefix + model.model_name + _suffix(n_steps))
-    os.makedirs(model_dir, exist_ok=True)
-    torch.save(
-        {"init_kwargs": {"dimension": grid_preds.shape[-1], **model_conf}, "state_dict": model.state_dict()},
-        os.path.join(model_dir, model.model_name + ".pt"),
-    )
-    model.model_dir = model_dir
     return model
 
 
 def _load_cfm(*, pred_dir, n_steps, prefix="", **_):
-    import os
-    import torch
-
-    cls = _cfm_class()
-    path = os.path.join(pred_dir, prefix + cls.model_name + _suffix(n_steps), cls.model_name + ".pt")
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model = cls(**checkpoint["init_kwargs"])
-    model.load_state_dict(checkpoint["state_dict"])
-    model.model_dir = os.path.dirname(path)
-    return model
+    return _cfm_class().from_checkpoint(out_dir=pred_dir, prefix=prefix, suffix=_suffix(n_steps))
 
 
 LIKELIHOODS = {
