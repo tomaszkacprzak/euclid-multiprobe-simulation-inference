@@ -5,13 +5,6 @@ from collections.abc import Sequence
 from typing import Optional
 
 
-def _run_likelihood(args: argparse.Namespace):
-    """Dispatch the likelihood command with its two path arguments."""
-    from msi.likelihood_cnf import main
-
-    return main(args.config_file, args.input_samples)
-
-
 def build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level MSI argument parser."""
     parser = argparse.ArgumentParser(
@@ -41,27 +34,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_mcmc_for_coverage_tests.configure_parser(coverage_parser)
     coverage_parser.set_defaults(handler=run_mcmc_for_coverage_tests.main)
-
-    likelihood_parser = subparsers.add_parser(
-        "likelihood",
-        help="Evaluate a likelihood for input samples.",
-        description="Evaluate a likelihood using a YAML configuration and HDF5 samples.",
-    )
-    likelihood_parser.add_argument(
-        "--config-file",
-        "--config_file",
-        dest="config_file",
-        required=True,
-        help="Path to the YAML configuration file.",
-    )
-    likelihood_parser.add_argument(
-        "--input-samples",
-        "--input_samples",
-        dest="input_samples",
-        required=True,
-        help="Path to the input samples in HDF5 format.",
-    )
-    likelihood_parser.set_defaults(handler=_run_likelihood)
 
     return parser
 
