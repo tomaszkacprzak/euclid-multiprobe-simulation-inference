@@ -331,8 +331,27 @@ class LikelihoodCFM(nn.Module):
     def sample_likelihood(
         self, theta: Any, n_samples: int = 1000, batch_size: Optional[int] = None, return_numpy: bool = True
     ):
+        """Draw samples with application-controlled base-noise dimensions.
+
+        Supplying the noise explicitly avoids relying on the CFM backend's
+        implicit noise construction, where singleton sample or conditioning
+        axes can be ambiguous.  Keeping that compatibility workaround here
+        also ensures the generated noise follows this wrapper's dtype and
+        device conversions.
+        """
         del batch_size  # torchdiffeq operates on the full conditional batch.
-        result = self.sample(theta, num_samples=n_samples)
+        if n_samples < 1:
+            raise ValueError("n_samples must be positive.")
+
+        theta_tensor = self._tensor(theta)
+        self._validate_matrix("theta", theta_tensor, self.theta_dim, "sampling")
+        noise_shape = (
+            (theta_tensor.shape[0], self.feature_dim)
+            if n_samples == 1
+            else (theta_tensor.shape[0], n_samples, self.feature_dim)
+        )
+        base_noise = torch.randn(noise_shape, dtype=theta_tensor.dtype, device=theta_tensor.device)
+        result = self.sample(theta_tensor, num_samples=n_samples, base_noise=base_noise)
         return result.detach().cpu().numpy() if return_numpy else result
 
     def _mcmc_log_posterior(self, theta_walkers: Any, x_obs: Any, device: Any = None):
