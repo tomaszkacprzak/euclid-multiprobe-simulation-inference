@@ -30,6 +30,12 @@ def configure_parser(parser):
     parser.add_argument("--out-dir", "--out_dir", dest="out_dir", required=True)
     parser.add_argument("--model-name", "--model_name", dest="model_name", default="model")
     parser.add_argument(
+        "--likelihood-model",
+        choices=("flow", "cfm", "gmm"),
+        default="flow",
+        help="Conditional likelihood implementation (default: flow).",
+    )
+    parser.add_argument(
         "--out-dir-2",
         "--out_dir_2",
         dest="out_dir_2",
@@ -78,21 +84,21 @@ def configure_parser(parser):
         "--flow_config",
         dest="flow_config",
         default=None,
-        help="Path to flow YAML config; uses hardcoded defaults if omitted.",
+        help="Path to likelihood YAML config; uses implementation defaults if omitted.",
     )
     parser.add_argument(
         "--load-flow",
         "--load_flow",
         dest="load_flow",
         action="store_true",
-        help="Load existing flow checkpoint instead of training a new one.",
+        help="Load an existing likelihood checkpoint instead of training a new one.",
     )
     parser.add_argument(
         "--flow-label",
         "--flow_label",
         dest="flow_label",
         default="",
-        help="Prefix for the flow checkpoint directory, e.g. 'larger' saves to "
+        help="Prefix for the likelihood checkpoint directory, e.g. 'larger' saves to "
         "pred_dir/larger_likelihood_flow_{n_steps}/. Useful when comparing multiple "
         "flow configs on the same prediction file.",
     )
@@ -104,7 +110,7 @@ def main(args):
     """Run the inference workload using parsed command-line arguments."""
     from msfm.utils.input_output import read_yaml
 
-    from msi.flow_conductor.likelihood_flow import LikelihoodFlow
+    from msi.likelihoods import build_likelihood, load_likelihood
     from msi.utils import flow as flow_utils
 
     is_multi = args.n_steps_multi is not None or args.n_steps_all
@@ -136,18 +142,27 @@ def main(args):
         n_steps_label = f"multi_{steps_str}" + ("_pca" if args.pca_compress else "")
 
         if args.load_flow:
-            suffix = f"_{n_steps_label}"
-            print("Loading flow from checkpoint...")
-            flow = LikelihoodFlow.from_checkpoint(out_dir=pred_dir, prefix=prefix, suffix=suffix)
+            print(f"Loading {args.likelihood_model} likelihood from checkpoint...")
+            flow = load_likelihood(
+                args.likelihood_model,
+                params=params,
+                msfm_conf=msfm_conf,
+                pred_dir=pred_dir,
+                n_steps=n_steps_label,
+                prefix=prefix,
+                grid_preds=grid_preds,
+                grid_cosmos=grid_cosmos,
+            )
         else:
-            flow = flow_utils.build_flow(
-                params,
-                msfm_conf,
-                pred_dir,
-                n_steps_label,
-                grid_preds,
-                grid_cosmos,
-                flow_conf,
+            flow = build_likelihood(
+                args.likelihood_model,
+                params=params,
+                msfm_conf=msfm_conf,
+                pred_dir=pred_dir,
+                n_steps=n_steps_label,
+                grid_preds=grid_preds,
+                grid_cosmos=grid_cosmos,
+                config=flow_conf,
                 prefix=prefix,
                 i_signal=i_signal,
             )
@@ -165,21 +180,42 @@ def main(args):
         )
 
         if args.load_flow:
-            suffix = f"_{n_steps}" if n_steps is not None else ""
-            print("Loading flow from checkpoint...")
-            flow = LikelihoodFlow.from_checkpoint(out_dir=pred_dir, prefix=prefix, suffix=suffix)
+            print(f"Loading {args.likelihood_model} likelihood from checkpoint...")
+            flow = load_likelihood(
+                args.likelihood_model,
+                params=params,
+                msfm_conf=msfm_conf,
+                pred_dir=pred_dir,
+                n_steps=n_steps,
+                prefix=prefix,
+                grid_preds=grid_preds,
+                grid_cosmos=grid_cosmos,
+            )
         else:
-            flow = flow_utils.build_flow(
-                params,
-                msfm_conf,
-                pred_dir,
-                n_steps,
-                grid_preds,
-                grid_cosmos,
-                flow_conf,
+            flow = build_likelihood(
+                args.likelihood_model,
+                params=params,
+                msfm_conf=msfm_conf,
+                pred_dir=pred_dir,
+                n_steps=n_steps,
+                grid_preds=grid_preds,
+                grid_cosmos=grid_cosmos,
+                config=flow_conf,
                 prefix=prefix,
                 i_signal=i_signal,
             )
+
+    if not args.load_flow and hasattr(flow, "plot_diagnostics"):
+        diagnostics_conf = flow_conf.get("diagnostics", {})
+        print("Plotting diagnostics...")
+        try:
+            flow.plot_diagnostics(
+                grid_preds_true=grid_preds,
+                grid_cosmos=grid_cosmos,
+                n_cosmos=diagnostics_conf.get("n_cosmos", 1000),
+            )
+        except Exception as e:
+            print(f"WARNING: plot_diagnostics failed ({type(e).__name__}: {e}), skipping.")
 
     obs_dict = observations.collect_observations(args, obs_pred_dict, obs_cosmo_dict, params, msfm_conf)
 
