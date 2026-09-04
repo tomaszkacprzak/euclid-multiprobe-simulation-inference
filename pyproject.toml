@@ -49,6 +49,12 @@ torch = [
     "torch",
 ]
 
+# Conditional flow matching (CFM) and its ODE solver
+cfm = [
+    "torch",
+    "torchdiffeq",
+]
+
 # Only for environments where TensorFlow is not pre-installed
 tf = [
     "tensorflow>=2.0",
