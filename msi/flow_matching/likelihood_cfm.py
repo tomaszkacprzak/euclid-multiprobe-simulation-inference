@@ -11,6 +11,8 @@ import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Subset, TensorDataset
 
+from msi.utils.dataset_split import validation_split_indices
+
 from .cnf_cfm import ConditionalFlowMatchingLikelihood
 
 _ACTIVATIONS = {
@@ -217,22 +219,10 @@ class LikelihoodCFM(nn.Module):
             raise ValueError("training: vali_split must be strictly between zero and one.")
 
         count = theta_tensor.shape[0]
-        if group_ids is None:
-            generator = torch.Generator().manual_seed(torch.initial_seed() if seed is None else seed)
-            order = torch.randperm(count, generator=generator).cpu().numpy()
-            split = int((1 - vali_split) * count)
-            train_indices, vali_indices = order[:split], order[split:]
-        else:
-            groups = np.asarray(group_ids)
-            if groups.ndim != 1 or len(groups) != count:
-                raise ValueError("training: group_ids must be one-dimensional and aligned with the data.")
-            unique_groups = np.unique(groups)
-            split = int((1 - vali_split) * len(unique_groups))
-            train_groups = unique_groups[:split]
-            train_indices = np.flatnonzero(np.isin(groups, train_groups))
-            vali_indices = np.flatnonzero(~np.isin(groups, train_groups))
-        if len(train_indices) == 0 or len(vali_indices) == 0:
-            raise ValueError("training: vali_split produced an empty training or validation partition.")
+        split_seed = torch.initial_seed() if seed is None else seed
+        train_indices, vali_indices, self.split_metadata = validation_split_indices(
+            count, vali_split, seed=split_seed, group_ids=group_ids
+        )
 
         train_indices = torch.as_tensor(train_indices, device=theta_tensor.device, dtype=torch.long)
         vali_indices = torch.as_tensor(vali_indices, device=theta_tensor.device, dtype=torch.long)
@@ -364,6 +354,36 @@ class LikelihoodCFM(nn.Module):
                 total += self.log_likelihood(observation[None, :], theta_tensor)
         return total.detach().cpu().numpy()
 
+    def sample_posterior(
+        self,
+        x_obs: Any,
+        n_walkers: int = 1024,
+        n_steps: int = 1000,
+        n_burnin_steps: int = 1000,
+        label: Optional[str] = None,
+        device: Any = None,
+        dont_save: bool = False,
+        **_: Any,
+    ) -> np.ndarray:
+        """Sample the posterior through the application-wide MCMC interface."""
+        from msfm.utils import prior
+
+        from msi.utils import mcmc
+
+        def log_posterior(theta_walkers: Any) -> np.ndarray:
+            likelihood = self._mcmc_log_posterior(theta_walkers, x_obs, device=device)
+            return prior.log_posterior(theta_walkers, likelihood, conf=None, params=self.params)
+
+        return mcmc.run_emcee(
+            log_posterior,
+            self.params,
+            out_dir=None if dont_save else self.model_dir,
+            label=label,
+            n_walkers=n_walkers,
+            n_steps=n_steps,
+            n_burnin_steps=n_burnin_steps,
+        )
+
     def save(self, path: Optional[str] = None) -> str:
         """Save architecture, adapters, scalers, and model weights (never optimizer state)."""
         path = path or (os.path.join(self.model_dir, self.model_name + ".pt") if self.model_dir else None)
@@ -379,6 +399,8 @@ class LikelihoodCFM(nn.Module):
                     "train_loss": list(self.train_losses),
                     "vali_loss": list(self.vali_losses),
                 },
+                "split_metadata": getattr(self, "split_metadata", None),
+                "validation_indices": getattr(self, "vali_indices", None),
             },
             path,
         )
@@ -396,6 +418,15 @@ class LikelihoodCFM(nn.Module):
         history = checkpoint.get("training_history", {})
         model.train_losses = list(history.get("train_loss", []))
         model.vali_losses = list(history.get("vali_loss", []))
+        if checkpoint.get("validation_indices") is not None:
+            model.vali_indices = torch.as_tensor(checkpoint["validation_indices"], dtype=torch.long).cpu()
+            model.split_metadata = checkpoint.get("split_metadata") or {}
         model.eval()
         model.freeze()
         return model
+
+    def get_validation_indices(self) -> np.ndarray:
+        """Return a copy of the held-out row indices stored in the checkpoint."""
+        if not hasattr(self, "vali_indices"):
+            raise ValueError("This checkpoint does not contain validation indices; retrain it to record the split.")
+        return self.vali_indices.detach().cpu().numpy().copy()

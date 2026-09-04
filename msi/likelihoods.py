@@ -209,3 +209,17 @@ def build_likelihood(name, **kwargs):
 
 def load_likelihood(name, **kwargs):
     return get_likelihood(name).load(**kwargs)
+
+
+def load_likelihood_checkpoint(name, model_dir, *, map_location="cpu"):
+    """Restore a registered wrapper directly from its self-describing checkpoint."""
+    import os
+
+    implementation = get_likelihood(name)
+    cls = implementation.wrapper_class()
+    if not hasattr(cls, "from_checkpoint"):
+        raise ValueError(f"The registered {name!r} likelihood does not provide the common checkpoint API.")
+    checkpoint_file = os.path.join(model_dir, implementation.model_name + ".pt")
+    if name == "flow":
+        return cls.from_checkpoint(checkpoint_file=checkpoint_file, device=map_location)
+    return cls.from_checkpoint(checkpoint_file, map_location=map_location)
