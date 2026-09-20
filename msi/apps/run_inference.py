@@ -143,39 +143,107 @@ def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
 
 
 def configure_parser(parser):
-    """Add inference arguments to an ``argparse`` parser."""
+    """Add the inference workflow's documented arguments to ``parser``.
+
+    Both hyphenated and underscored spellings are retained because existing
+    launch scripts use both forms.  Paths in this interface refer to artifacts
+    produced by the companion network-training workflow; this application does
+    not create prediction files itself.
+    """
     from msi.likelihoods import LIKELIHOODS
 
-    parser.add_argument("--out-dir", "--out_dir", dest="out_dir", required=True)
-    parser.add_argument("--model-name", "--model_name", dest="model_name", default="model")
+    # Primary prediction source: together these identify OUT_DIR/MODEL_NAME,
+    # which contains the prediction HDF5 file and, normally, configs.yaml.
+    parser.add_argument(
+        "--out-dir",
+        "--out_dir",
+        dest="out_dir",
+        required=True,
+        metavar="PATH",
+        help="Base output directory containing the trained summary-network model directory (required).",
+    )
+    parser.add_argument(
+        "--model-name",
+        "--model_name",
+        dest="model_name",
+        default="model",
+        metavar="NAME",
+        help="Name of the primary model subdirectory inside --out-dir (default: %(default)s).",
+    )
+    # Select the conditional likelihood implementation trained on (or loaded
+    # for) the network summaries.
     parser.add_argument(
         "--likelihood-model",
         choices=tuple(LIKELIHOODS),
         default="flow",
-        help="Conditional likelihood implementation (default: flow).",
+        help="Conditional likelihood implementation to train or load (default: %(default)s).",
     )
+
+    # Optional second prediction source.  When enabled, its rows are aligned
+    # with the primary source and its summary features are concatenated.
     parser.add_argument(
         "--out-dir-2",
         "--out_dir_2",
         dest="out_dir_2",
         default=None,
+        metavar="PATH",
         help="Optional second model's out_dir; its summary is concatenated feature-wise with the "
         "primary model's summary, e.g. to combine a maps-level and a Cls-level model.",
     )
-    parser.add_argument("--model-name-2", "--model_name_2", dest="model_name_2", default="model")
-    parser.add_argument("--n-steps-2", "--n_steps_2", dest="n_steps_2", type=int, default=None)
-    
-    # Optional explicit config overrides (Cls path); falls back to pred_dir/configs.yaml
-    parser.add_argument("--msfm-config", "--msfm_config", dest="msfm_config", default=None)
-    parser.add_argument("--dlss-config", "--dlss_config", dest="dlss_config", default=None)
+    parser.add_argument(
+        "--model-name-2",
+        "--model_name_2",
+        dest="model_name_2",
+        default="model",
+        metavar="NAME",
+        help="Name of the second model subdirectory inside --out-dir-2 (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--n-steps-2",
+        "--n_steps_2",
+        dest="n_steps_2",
+        type=int,
+        default=None,
+        metavar="STEPS",
+        help="Training-step count selecting preds_STEPS.h5 for the second model; auto-detects "
+        "the largest available count, then falls back to preds.h5, when omitted.",
+    )
+
+    # Configuration metadata for the summary network and its dataset.  The two
+    # overrides operate as a pair; otherwise both documents come from the
+    # primary prediction directory's configs.yaml.
+    parser.add_argument(
+        "--msfm-config",
+        "--msfm_config",
+        dest="msfm_config",
+        default=None,
+        metavar="YAML",
+        help="Explicit MSFM model YAML path. Used only together with --dlss-config; otherwise "
+        "both configs are read from the primary model directory's configs.yaml.",
+    )
+    parser.add_argument(
+        "--dlss-config",
+        "--dlss_config",
+        dest="dlss_config",
+        default=None,
+        metavar="YAML",
+        help="Explicit DeepLSS dataset YAML path. Used only together with --msfm-config; otherwise "
+        "both configs are read from the primary model directory's configs.yaml.",
+    )
+
+    # A single primary prediction checkpoint can be selected explicitly.  With
+    # no selection, resolution prefers the greatest numeric preds_*.h5 suffix.
     parser.add_argument(
         "--n-steps",
         "--n_steps",
         dest="n_steps",
         type=int,
         default=None,
+        metavar="STEPS",
         help="Prediction file step count; auto-detects the largest preds_*.h5 if omitted.",
     )
+    # Multi-checkpoint mode combines features from an explicit set of primary
+    # model prediction files.  It is mutually exclusive with --n-steps-all.
     parser.add_argument(
         "--n-steps-multi",
         "--n_steps_multi",
@@ -183,8 +251,10 @@ def configure_parser(parser):
         nargs="+",
         type=int,
         default=None,
+        metavar="STEPS",
         help="Combine predictions from these specific training-step counts (feature-wise concatenation).",
     )
+    # This is the discovery-based counterpart to --n-steps-multi.
     parser.add_argument(
         "--n-steps-all",
         "--n_steps_all",
@@ -192,6 +262,8 @@ def configure_parser(parser):
         action="store_true",
         help="Combine predictions from ALL preds_*.h5 files found in the model directory.",
     )
+    # PCA is meaningful in multi-checkpoint mode: it projects the concatenated
+    # features to the dimensionality of one prediction file's summaries.
     parser.add_argument(
         "--pca-compress",
         "--pca_compress",
@@ -199,13 +271,29 @@ def configure_parser(parser):
         action="store_true",
         help="After concatenating multi-step summaries, apply PCA to compress back to single-run dimensionality.",
     )
+
+    # Likelihood configuration is separate from the summary-network metadata.
+    # An empty configuration selects implementation-level defaults.
     parser.add_argument(
         "--likelihood-config",
         "--likelihood_config",
         dest="likelihood_config",
         default=None,
+        metavar="YAML",
         help="Path to the selected likelihood model's YAML config; uses implementation defaults if omitted.",
     )
+    # Keep the old flow-specific spelling functional while directing new calls
+    # to the model-neutral option.  _config_path rejects supplying both names.
+    parser.add_argument(
+        "--flow-config",
+        "--flow_config",
+        dest="flow_config",
+        default=None,
+        metavar="YAML",
+        help="Deprecated alias for --likelihood-config; do not supply both options.",
+    )
+    # Loading skips likelihood fitting and diagnostic generation, and restores
+    # the implementation-specific checkpoint from the primary model directory.
     parser.add_argument(
         "--load-likelihood",
         "--load_likelihood",
@@ -213,15 +301,19 @@ def configure_parser(parser):
         action="store_true",
         help="Load an existing likelihood checkpoint instead of training a new one.",
     )
+    # The label disambiguates likelihood experiments that share predictions by
+    # adding a prefix to the implementation's checkpoint directory name.
     parser.add_argument(
         "--likelihood-label",
         "--likelihood_label",
         dest="likelihood_label",
         default="",
-        help="Prefix for the likelihood checkpoint directory, e.g. 'larger' saves to "
-        "pred_dir/larger_likelihood_{n_steps}/. Useful when comparing multiple "
-        "flow configs on the same prediction file.",
+        metavar="LABEL",
+        help="Prefix added to the selected implementation's likelihood checkpoint directory. "
+        "Useful when comparing multiple likelihood configs on the same prediction file.",
     )
+    # Observation flags determine which stored summaries receive posterior
+    # sampling after the likelihood has been trained or loaded.
     observations.add_obs_args(parser)
     return parser
 
