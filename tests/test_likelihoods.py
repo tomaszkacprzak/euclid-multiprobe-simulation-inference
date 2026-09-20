@@ -30,6 +30,14 @@ def test_inference_parser_defaults_to_flow_and_accepts_registry_names():
         assert args.likelihood_model == name
 
 
+def test_inference_parser_documents_every_option():
+    parser = configure_parser(argparse.ArgumentParser())
+
+    undocumented = [action.option_strings for action in parser._actions if action.option_strings and not action.help]
+
+    assert undocumented == []
+
+
 def test_coverage_parser_uses_the_inference_likelihood_registry():
     parser = configure_coverage_parser(argparse.ArgumentParser())
     required = ["--preds-file", "preds.h5", "--flow-dir", "checkpoint"]

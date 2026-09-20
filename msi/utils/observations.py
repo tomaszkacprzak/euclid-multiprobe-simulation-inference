@@ -1,19 +1,67 @@
 def add_obs_args(parser, mock_labels_default=None):
     """Add observation inclusion flags to an argument parser (all default off)."""
-    parser.add_argument("--include-grid", "--include_grid", dest="include_grid", action="store_true")
-    parser.add_argument("--n-grid-examples", "--n_grid_examples", dest="n_grid_examples", type=int, default=16)
-    parser.add_argument("--include-des", "--include_des", dest="include_des", action="store_true")
-    parser.add_argument("--include-buzzard", "--include_buzzard", dest="include_buzzard", action="store_true")
+    # Grid observations are selected by sorted ``grid_*`` label, up to the
+    # requested limit, and include known cosmologies when those are available.
     parser.add_argument(
-        "--buzzard-labels", "--buzzard_labels", dest="buzzard_labels", nargs="+", default=["Buzzard_mean"]
+        "--include-grid",
+        "--include_grid",
+        dest="include_grid",
+        action="store_true",
+        help="Run posterior sampling for stored grid_* observations (default: disabled).",
     )
-    parser.add_argument("--include-mocks", "--include_mocks", dest="include_mocks", action="store_true")
+    parser.add_argument(
+        "--n-grid-examples",
+        "--n_grid_examples",
+        dest="n_grid_examples",
+        type=int,
+        default=16,
+        metavar="COUNT",
+        help="Maximum number of sorted grid_* observations to use with --include-grid (default: %(default)s).",
+    )
+    # DES selects the two fixed labels recognized by get_des_observations.
+    parser.add_argument(
+        "--include-des",
+        "--include_des",
+        dest="include_des",
+        action="store_true",
+        help="Run posterior sampling for available DESy3 and DESy3_no_sys observations (default: disabled).",
+    )
+    # Buzzard labels are used exactly as supplied and missing labels are skipped.
+    parser.add_argument(
+        "--include-buzzard",
+        "--include_buzzard",
+        dest="include_buzzard",
+        action="store_true",
+        help="Run posterior sampling for the labels selected by --buzzard-labels (default: disabled).",
+    )
+    parser.add_argument(
+        "--buzzard-labels",
+        "--buzzard_labels",
+        dest="buzzard_labels",
+        nargs="+",
+        default=["Buzzard_mean"],
+        metavar="LABEL",
+        help="One or more exact stored prediction labels used with --include-buzzard "
+        "(default: %(default)s).",
+    )
+    # Mock base labels gain a ``_mean`` suffix for prediction lookup; cosmology
+    # metadata, when present, is looked up under the unsuffixed base label.
+    parser.add_argument(
+        "--include-mocks",
+        "--include_mocks",
+        dest="include_mocks",
+        action="store_true",
+        help="Run posterior sampling for the mock labels selected by --mock-labels (default: disabled).",
+    )
     parser.add_argument(
         "--mock-labels",
         "--mock_labels",
         dest="mock_labels",
         nargs="+",
         default=mock_labels_default or ["fiducial_bench"],
+        metavar="LABEL",
+        help="One or more mock base labels; each is read from LABEL_mean in the predictions "
+        "when --include-mocks is set (default: %(default)s).",
     )
 
 
