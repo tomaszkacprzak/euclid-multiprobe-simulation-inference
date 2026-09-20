@@ -180,6 +180,7 @@ def plot_likelihoods(
     grid_size: int,
     output_dir: Path,
     device: str,
+    cmap: str = "turbo",
 ) -> Path:
     """Plot eight likelihood surfaces ``p(y_observed | x_grid)``."""
     axis = torch.linspace(-5.0, 5.0, grid_size)
@@ -190,7 +191,7 @@ def plot_likelihoods(
         grid_y = observations[index].to(device).expand(grid_x.shape[0], -1)
         log_probability = model.log_prob(grid_y, grid_x).detach().cpu()
         probability = torch.exp(log_probability).reshape(grid_size, grid_size)
-        image = ax.contourf(axis, axis, probability.T, levels=30, cmap="viridis")
+        image = ax.contourf(axis, axis, probability.T, levels=30, cmap=cmap)
         ax.plot(*generating_x[index].tolist(), marker="x", color="red", markersize=8, markeredgewidth=2)
         ax.set_title(rf"$y_{{{index + 1}}}=({observations[index, 0]:.2f}, {observations[index, 1]:.2f})$")
         fig.colorbar(image, ax=ax, label=r"$p(y_i\mid x)$")

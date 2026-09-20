@@ -6,7 +6,6 @@ import h5py
 import numpy as np
 
 from msfm.utils.input_output import read_yaml
-from msi.flow_conductor import architecture
 from msi.utils import input_output
 
 
@@ -215,6 +214,8 @@ def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
     """
     emb_conf = flow_conf.get("context_embedding", {})
     ctx_emb_dim = emb_conf.get("dim", 32)
+
+    from msi.flow_conductor import architecture
 
     embedding_net = architecture.get_context_embedding_net(
         context_dim=theta_dim,

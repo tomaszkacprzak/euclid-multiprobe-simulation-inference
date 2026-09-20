@@ -164,6 +164,7 @@ def configure_parser(parser):
     )
     parser.add_argument("--model-name-2", "--model_name_2", dest="model_name_2", default="model")
     parser.add_argument("--n-steps-2", "--n_steps_2", dest="n_steps_2", type=int, default=None)
+    
     # Optional explicit config overrides (Cls path); falls back to pred_dir/configs.yaml
     parser.add_argument("--msfm-config", "--msfm_config", dest="msfm_config", default=None)
     parser.add_argument("--dlss-config", "--dlss_config", dest="dlss_config", default=None)
@@ -206,26 +207,19 @@ def configure_parser(parser):
         help="Path to the selected likelihood model's YAML config; uses implementation defaults if omitted.",
     )
     parser.add_argument(
-        "--flow-config",
-        "--flow_config",
-        dest="flow_config",
-        default=None,
-        help="Deprecated alias for --likelihood-config.",
-    )
-    parser.add_argument(
-        "--load-flow",
-        "--load_flow",
-        dest="load_flow",
+        "--load-likelihood",
+        "--load_likelihood",
+        dest="load_likelihood",
         action="store_true",
         help="Load an existing likelihood checkpoint instead of training a new one.",
     )
     parser.add_argument(
-        "--flow-label",
-        "--flow_label",
-        dest="flow_label",
+        "--likelihood-label",
+        "--likelihood_label",
+        dest="likelihood_label",
         default="",
         help="Prefix for the likelihood checkpoint directory, e.g. 'larger' saves to "
-        "pred_dir/larger_likelihood_flow_{n_steps}/. Useful when comparing multiple "
+        "pred_dir/larger_likelihood_{n_steps}/. Useful when comparing multiple "
         "flow configs on the same prediction file.",
     )
     observations.add_obs_args(parser)
@@ -246,7 +240,7 @@ def main(args):
     config_path = _config_path(args)
     likelihood_conf = read_yaml(config_path) if config_path else {}
     likelihood_conf = _validate_likelihood_config(likelihood_conf, args.likelihood_model)
-    prefix = f"{args.flow_label}_" if args.flow_label else ""
+    prefix = f"{args.likelihood_label}_" if args.likelihood_label else ""
 
     if is_multi:
         pred_dir = os.path.join(args.out_dir, args.model_name)
@@ -296,6 +290,9 @@ def main(args):
             )
     else:
         pred_dir, pred_file, n_steps = flow_utils.resolve_pred_file(args.out_dir, args.model_name, args.n_steps)
+        print(f"pred_dir: {pred_dir}")
+        print(f"pred_file: {pred_file}")
+        print(f"n_steps: {n_steps}")
         dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
         params = dlss_conf["dset"]["training"]["params"]
 
@@ -307,7 +304,7 @@ def main(args):
             pred_file, pred_file_2
         )
 
-        if args.load_flow:
+        if args.load_likelihood:
             print(f"Loading {args.likelihood_model} likelihood from checkpoint...")
             flow = load_likelihood(
                 args.likelihood_model,
@@ -333,7 +330,7 @@ def main(args):
                 i_signal=i_signal,
             )
 
-    if not args.load_flow and hasattr(flow, "plot_diagnostics"):
+    if not args.load_likelihood and hasattr(flow, "plot_diagnostics"):
         diagnostics_conf = likelihood_conf.get("diagnostics", {})
         print("Plotting diagnostics...")
         try:
