@@ -1,8 +1,7 @@
 """Application-level registry and factory for likelihood implementations.
 
-Imports are deliberately lazy: selecting the PyTorch flow must not require the
-optional TensorFlow dependencies used by the GMM implementation (and vice
-versa).
+Imports are deliberately lazy so selecting one PyTorch model does not import
+the dependencies of every other model.
 """
 
 from dataclasses import dataclass

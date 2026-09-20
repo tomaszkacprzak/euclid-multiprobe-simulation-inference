@@ -12,7 +12,7 @@ Collection of inference methods to go from arbitrary summary statistics (neural 
 
 ## Installation
 
-Requires Python >= 3.8. Backend dependencies are optional: PyTorch is used by normalizing flows, CFM uses both PyTorch and `torchdiffeq`, and Gaussian mixture models use TensorFlow >= 2.0/TensorFlow Probability.
+Requires Python >= 3.8. Machine-learning models use PyTorch; CFM additionally uses `torchdiffeq`.
 
 **Main dependencies:**
 - [`euclid-multiprobe-simulation-forward-model`](https://github.com/tomaszkacprzak/euclid-multiprobe-simulation-forward-model/) for utilities and data loading
@@ -44,11 +44,6 @@ pip install -e .[torch]
 pip install -e .[cfm]
 ```
 
-*To include TensorFlow for Gaussian mixture models*:
-```bash
-pip install -e .[torch,tf]
-```
-
 Use the first option when PyTorch is available via system modules (e.g., `module load pytorch`) to preserve optimized GPU configurations.
 
 ## Repository Structure
@@ -57,7 +52,7 @@ Use the first option when PyTorch is available via system modules (e.g., `module
 - `msi/apps` - Inference scripts for normalizing flow training and MCMC sampling
 - `msi/flow_conductor` - Normalizing flow implementation using PyTorch and [`enflows`](https://github.com/VincentStimper/normalizing-flows)
 - `msi/flow_matching` - Conditional flow-matching (CFM) likelihood using PyTorch and `torchdiffeq`
-- `msi/gaussian_mixture` - Gaussian mixture model implementation using TensorFlow Probability
+- `msi/gaussian_mixture` - Gaussian mixture model implementation using PyTorch distributions
 - `msi/likelihood_registry.py` - Lazy likelihood selection without importing unselected optional backends
 - `msi/utils` - MCMC sampling, preprocessing, diagnostics, and visualization utilities
 - `msi/likelihood_base.py` - Base class for likelihood implementations

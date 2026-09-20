@@ -55,12 +55,6 @@ cfm = [
     "torchdiffeq",
 ]
 
-# Only for environments where TensorFlow is not pre-installed
-tf = [
-    "tensorflow>=2.0",
-    "tensorflow-probability",
-]
-
 # Development tools
 dev = [
     "pytest",
