@@ -107,20 +107,6 @@ def _validate_likelihood_config(config, likelihood_model):
     return config
 
 
-def _config_path(args):
-    """Resolve the model-neutral option and its deprecated flow-named alias."""
-    likelihood_config = getattr(args, "likelihood_config", None)
-    flow_config = getattr(args, "flow_config", None)
-    if likelihood_config and flow_config:
-        raise ValueError("--likelihood-config and deprecated --flow-config are mutually exclusive.")
-    if flow_config:
-        warnings.warn(
-            "--flow-config is deprecated; use --likelihood-config instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    return likelihood_config or flow_config
-
 
 def _load_configs(pred_dir, msfm_config_path, dlss_config_path):
     """Load msfm_conf and dlss_conf from either explicit paths or pred_dir/configs.yaml.
@@ -282,16 +268,6 @@ def configure_parser(parser):
         metavar="YAML",
         help="Path to the selected likelihood model's YAML config; uses implementation defaults if omitted.",
     )
-    # Keep the old flow-specific spelling functional while directing new calls
-    # to the model-neutral option.  _config_path rejects supplying both names.
-    parser.add_argument(
-        "--flow-config",
-        "--flow_config",
-        dest="flow_config",
-        default=None,
-        metavar="YAML",
-        help="Deprecated alias for --likelihood-config; do not supply both options.",
-    )
     # Loading skips likelihood fitting and diagnostic generation, and restores
     # the implementation-specific checkpoint from the primary model directory.
     parser.add_argument(
@@ -317,6 +293,35 @@ def configure_parser(parser):
     observations.add_obs_args(parser)
     return parser
 
+def get_param_names(dlss_conf):
+
+    # Legacy DES config format
+    if 'dset' in dlss_conf:
+        params = dlss_conf["dset"]["training"]["params"]
+        print(f"params: {params}")
+
+
+    # New Euclid config format
+    else:
+
+        from euclid_multiprobe_deeplss_training.training import TrainingConfig, load_physics_model_class
+        from euclid_multiprobe_deeplss_training.utils.config import with_forward_model_config, load_config
+        from pathlib import Path
+
+        raw_config = with_forward_model_config(dlss_conf)
+        config = TrainingConfig.from_mapping(raw_config)
+        physics_model_class = load_physics_model_class(config.physics_model)
+        print(f"physics_model_class: {physics_model_class}")
+        physics_model = physics_model_class(
+            config.forward_model,
+            nside=config.forward_model["analysis"]["n_side"],
+            **config.physics_model_args,
+        )
+        params = physics_model.params
+        print(f"params: {params}")
+
+    return params
+
 
 def main(args):
     """Run the inference workload using parsed command-line arguments."""
@@ -329,7 +334,7 @@ def main(args):
     if args.n_steps_multi is not None and args.n_steps_all:
         raise ValueError("--n_steps_multi and --n_steps_all are mutually exclusive.")
 
-    config_path = _config_path(args)
+    config_path = args.likelihood_config
     likelihood_conf = read_yaml(config_path) if config_path else {}
     likelihood_conf = _validate_likelihood_config(likelihood_conf, args.likelihood_model)
     prefix = f"{args.likelihood_label}_" if args.likelihood_label else ""
@@ -350,7 +355,7 @@ def main(args):
         )
 
         dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
-        params = dlss_conf["dset"]["training"]["params"]
+        params = get_param_names(dlss_conf)
 
         steps_str = "_".join(str(s) for s in steps_list)
         n_steps_label = f"multi_{steps_str}" + ("_pca" if args.pca_compress else "")
@@ -386,7 +391,7 @@ def main(args):
         print(f"pred_file: {pred_file}")
         print(f"n_steps: {n_steps}")
         dlss_conf, msfm_conf = _load_configs(pred_dir, args.msfm_config, args.dlss_config)
-        params = dlss_conf["dset"]["training"]["params"]
+        params = get_param_names(dlss_conf)
 
         pred_file_2 = None
         if args.out_dir_2:
