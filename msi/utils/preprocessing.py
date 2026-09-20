@@ -589,7 +589,7 @@ def get_binned_power_spectra(
     ell_weighting=None,  # None | "ell" | "ell_sq" — multiply C_ℓ by ℓ or ℓ² before log
     scale_cut=None,  # None / "soft" → Gaussian smoothing; "soft_pruned" → prune noise-dominated bins
 ):
-    """like msi.utils.dataset.get_binned_power_spectra_dset, but without the TensorFlow dependency and dset"""
+    """Like ``get_binned_power_spectra_dset``, but returning arrays rather than a data loader."""
 
     msfm_conf = files.load_config(msfm_conf)
 

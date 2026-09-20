@@ -1,10 +1,31 @@
-import tensorflow as tf
 import numpy as np
+import torch
+from torch.utils.data import DataLoader, Dataset
 
 from msfm.utils import logger
-from msi.utils import preprocessing, plotting
+from msi.utils import preprocessing
 
 LOGGER = logger.get_logger(__file__)
+
+
+class _PowerSpectrumDataset(Dataset):
+    """Apply spectrum augmentation lazily using PyTorch tensors."""
+
+    def __init__(self, signals, labels, noise, transform):
+        self.signals = torch.as_tensor(signals)
+        self.labels = torch.as_tensor(labels)
+        self.noise = None if noise is None else torch.as_tensor(noise)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.signals)
+
+    def __getitem__(self, index):
+        signal, label = self.signals[index].clone(), self.labels[index]
+        if self.noise is None:
+            return self.transform(signal, label)
+        noise = self.noise[torch.randint(len(self.noise), ())]
+        return self.transform((signal, label), noise)
 
 
 def get_binned_power_spectra_dset(
@@ -19,11 +40,11 @@ def get_binned_power_spectra_dset(
     noise_indices=0.8,
     n_examples_to_plot=10,
     cls_from_maps=False,
-    # tf.data
+    # data loading
     batch_size=2**12,
     shuffle_buffer="full",
     prefetch=3,
-    num_parallel_calls=tf.data.AUTOTUNE,
+    num_parallel_calls=0,
     float_type=np.float32,
     # selection
     probe=None,
@@ -114,9 +135,7 @@ def get_binned_power_spectra_dset(
     grid_cosmos_test = out_dict["grid/cosmos/test"]
     noise_cls = out_dict["noise/cls"]
 
-    ell_weights_tf = (
-        tf.constant(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
-    )
+    ell_weights_torch = torch.as_tensor(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
 
     if shuffle_buffer == "full":
         shuffle_buffer = grid_cls_train.shape[0]
@@ -127,39 +146,21 @@ def get_binned_power_spectra_dset(
         if with_gaussian_noise:
             signal += noise
 
-        if ell_weights_tf is not None:
-            signal = signal * ell_weights_tf
+        if ell_weights_torch is not None:
+            signal = signal * ell_weights_torch
 
         if apply_log:
-            signal = tf.math.log(tf.math.abs(signal))
+            signal = torch.log(torch.abs(signal))
 
-        signal = tf.where(tf.math.is_finite(signal), signal, tf.zeros_like(signal))
+        signal = torch.where(torch.isfinite(signal), signal, torch.zeros_like(signal))
 
         return signal, label
 
-    # create the datasets
-    dset_noise = tf.data.Dataset.from_tensor_slices(noise_cls).cache().shuffle(shuffle_buffer).repeat()
-
-    dset_train = (
-        tf.data.Dataset.from_tensor_slices((grid_cls_train, grid_cosmos_train))
-        .cache()
-        .shuffle(shuffle_buffer)
-        .repeat()
-    )
-    dset_train = (
-        tf.data.Dataset.zip((dset_train, dset_noise))
-        .batch(batch_size)
-        .map(_augmentations, num_parallel_calls=num_parallel_calls, deterministic=False)
-        .prefetch(prefetch)
-    )
-
-    dset_test = tf.data.Dataset.from_tensor_slices((grid_cls_test, grid_cosmos_test)).cache()
-    dset_test = (
-        tf.data.Dataset.zip((dset_test, dset_noise))
-        .batch(batch_size)
-        .map(_augmentations, num_parallel_calls=num_parallel_calls, deterministic=True)
-        .prefetch(prefetch)
-    )
+    train_dataset = _PowerSpectrumDataset(grid_cls_train, grid_cosmos_train, noise_cls, _augmentations)
+    test_dataset = _PowerSpectrumDataset(grid_cls_test, grid_cosmos_test, noise_cls, _augmentations)
+    workers = 0 if num_parallel_calls is None else int(num_parallel_calls)
+    dset_train = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
+    dset_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=workers)
 
     return dset_train, dset_test, out_dict
 
@@ -176,11 +177,11 @@ def get_binned_power_spectra_dset_hard_cut(
     noise_indices=0.8,
     n_examples_to_plot=10,
     cls_from_maps=False,
-    # tf.data
+    # data loading
     batch_size=2**12,
     shuffle_buffer="full",
     prefetch=3,
-    num_parallel_calls=tf.data.AUTOTUNE,
+    num_parallel_calls=0,
     float_type=np.float32,
     # selection
     probe=None,
@@ -194,7 +195,7 @@ def get_binned_power_spectra_dset_hard_cut(
     apply_log=True,
     standardize=False,
     ell_weighting=None,  # None | "ell" | "ell_sq"
-    n_extra_bins=0,      # 0 → hard cut; 1 → hard_conservative
+    n_extra_bins=0,  # 0 → hard cut; 1 → hard_conservative
 ):
     """Hard scale cut variant of get_binned_power_spectra_dset.
 
@@ -254,41 +255,27 @@ def get_binned_power_spectra_dset_hard_cut(
     grid_cosmos_train = out_dict["grid/cosmos/train"]
     grid_cosmos_test = out_dict["grid/cosmos/test"]
 
-    ell_weights_tf = (
-        tf.constant(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
-    )
+    ell_weights_torch = torch.as_tensor(out_dict["ell_weights"]) if out_dict.get("ell_weights") is not None else None
 
     if shuffle_buffer == "full":
         shuffle_buffer = grid_cls_train.shape[0]
 
     def _augmentations(signal, label):
-        if ell_weights_tf is not None:
-            signal = signal * ell_weights_tf
+        if ell_weights_torch is not None:
+            signal = signal * ell_weights_torch
 
         if apply_log:
-            signal = tf.math.log(tf.math.abs(signal))
+            signal = torch.log(torch.abs(signal))
 
-        signal = tf.where(tf.math.is_finite(signal), signal, tf.zeros_like(signal))
+        signal = torch.where(torch.isfinite(signal), signal, torch.zeros_like(signal))
 
         return signal, label
 
-    dset_train = (
-        tf.data.Dataset.from_tensor_slices((grid_cls_train, grid_cosmos_train))
-        .cache()
-        .shuffle(shuffle_buffer)
-        .repeat()
-        .batch(batch_size)
-        .map(_augmentations, num_parallel_calls=num_parallel_calls, deterministic=False)
-        .prefetch(prefetch)
-    )
-
-    dset_test = (
-        tf.data.Dataset.from_tensor_slices((grid_cls_test, grid_cosmos_test))
-        .cache()
-        .batch(batch_size)
-        .map(_augmentations, num_parallel_calls=num_parallel_calls, deterministic=True)
-        .prefetch(prefetch)
-    )
+    train_dataset = _PowerSpectrumDataset(grid_cls_train, grid_cosmos_train, None, _augmentations)
+    test_dataset = _PowerSpectrumDataset(grid_cls_test, grid_cosmos_test, None, _augmentations)
+    workers = 0 if num_parallel_calls is None else int(num_parallel_calls)
+    dset_train = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
+    dset_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=workers)
 
     return dset_train, dset_test, out_dict
 
