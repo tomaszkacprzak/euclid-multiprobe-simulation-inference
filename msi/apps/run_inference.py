@@ -328,7 +328,7 @@ def main(args):
     from msfm.utils.input_output import read_yaml
 
     from msi.likelihoods import build_likelihood, load_likelihood
-    from msi.utils import flow as flow_utils
+    from msi.utils import likelihood as likelihood_utils
 
     is_multi = args.n_steps_multi is not None or args.n_steps_all
     if args.n_steps_multi is not None and args.n_steps_all:
@@ -342,7 +342,7 @@ def main(args):
     if is_multi:
         pred_dir = os.path.join(args.out_dir, args.model_name)
         if args.n_steps_all:
-            steps_list = flow_utils.find_all_n_steps(pred_dir)
+            steps_list = likelihood_utils.find_all_n_steps(pred_dir)
             if not steps_list:
                 raise FileNotFoundError(f"No preds_*.h5 found in {pred_dir}")
             print(f"Using all steps: {steps_list}")
@@ -350,7 +350,7 @@ def main(args):
             steps_list = sorted(args.n_steps_multi)
         pred_files = [os.path.join(pred_dir, f"preds_{s}.h5") for s in steps_list]
 
-        grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal = flow_utils.load_grid_summaries_multi(
+        grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal = likelihood_utils.load_grid_summaries_multi(
             pred_files, pca_compress=args.pca_compress
         )
 
@@ -386,7 +386,7 @@ def main(args):
                 i_signal=i_signal,
             )
     else:
-        pred_dir, pred_file, n_steps = flow_utils.resolve_pred_file(args.out_dir, args.model_name, args.n_steps)
+        pred_dir, pred_file, n_steps = likelihood_utils.resolve_pred_file(args.out_dir, args.model_name, args.n_steps)
         print(f"pred_dir: {pred_dir}")
         print(f"pred_file: {pred_file}")
         print(f"n_steps: {n_steps}")
@@ -395,9 +395,9 @@ def main(args):
 
         pred_file_2 = None
         if args.out_dir_2:
-            _, pred_file_2, _ = flow_utils.resolve_pred_file(args.out_dir_2, args.model_name_2, args.n_steps_2)
+            _, pred_file_2, _ = likelihood_utils.resolve_pred_file(args.out_dir_2, args.model_name_2, args.n_steps_2)
 
-        grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal = flow_utils.load_grid_summaries(
+        grid_preds, grid_cosmos, obs_pred_dict, obs_cosmo_dict, i_signal = likelihood_utils.load_grid_summaries(
             pred_file, pred_file_2
         )
 

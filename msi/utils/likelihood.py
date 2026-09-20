@@ -255,14 +255,14 @@ def build_flow_architecture(x_dim: int, theta_dim: int, flow_conf: dict):
     return embedding_net, transform
 
 
-def build_flow(
+def build_likelihood(
     params,
     msfm_conf,
     pred_dir,
     n_steps,
     grid_preds,
     grid_cosmos,
-    flow_conf: dict,
+    likelihood_conf: dict,
     prefix: str = "",
     i_signal=None,
     likelihood_model="flow",
@@ -276,7 +276,7 @@ def build_flow(
         n_steps: Training-step label appended to saved filenames.
         grid_preds: Array of shape (N, x_dim) — network summary statistics.
         grid_cosmos: Array of shape (N, theta_dim) — cosmological parameters.
-        flow_conf: Flow config dict (keys: context_embedding, transform, training,
+        likelihood_conf: Flow config dict (keys: context_embedding, transform, training,
             diagnostics). Use {} or read_yaml(path) to populate.
         prefix: Prepended to the saved model directory name, e.g. ``"larger_"`` →
             ``pred_dir/larger_likelihood_flow_{n_steps}/``. Useful when comparing
@@ -300,7 +300,7 @@ def build_flow(
         n_steps=n_steps,
         grid_preds=grid_preds,
         grid_cosmos=grid_cosmos,
-        config=flow_conf,
+        config=likelihood_conf,
         prefix=prefix,
         i_signal=i_signal,
     )
